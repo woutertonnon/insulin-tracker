@@ -25,7 +25,7 @@ struct DialView: View {
     @State private var pendingSave: Task<Void, Never>?
     @State private var justSaved: SavedInfo?
 
-    private let autoSaveDelay: Duration = .seconds(5)
+    private let autoSaveDelay: Duration = .seconds(3)
 
     // Dial range: up to 400 g carbs (40 * 10) and 20 U insulin (40 * 0.5).
     private let maxSteps = 40.0
