@@ -11,6 +11,9 @@ concurrency:
   group: testflight
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-14
@@ -23,6 +26,9 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+      # ---- fastlane match (certs on the `certs` branch of this repo) ----
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_URL: ${{ github.server_url }}/${{ github.repository }}.git
       FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
     steps:
       - uses: actions/checkout@v4
@@ -38,10 +44,10 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Write App Store Connect API key to disk
+      - name: Prepare match git auth
         run: |
-          echo "$ASC_KEY_CONTENT" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
-          echo "ASC_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+          AUTH=$(printf 'x-access-token:%s' "${{ github.token }}" | base64 | tr -d '\n')
+          echo "MATCH_GIT_BASIC_AUTHORIZATION=$AUTH" >> "$GITHUB_ENV"
 
       - name: Cache bundler
         uses: actions/cache@v4

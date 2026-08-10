@@ -1,0 +1,39 @@
+name: Set up signing (run once)
+
+# Manually triggered. Creates the distribution certificate + App Store
+# provisioning profiles and stores them, encrypted, on the `certs` branch
+# of this repo. Run once (and again only if certs expire/are revoked).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # match needs to push the certs branch
+
+jobs:
+  bootstrap:
+    runs-on: macos-14
+    env:
+      DEVELOPMENT_TEAM: ${{ vars.DEVELOPMENT_TEAM }}
+      APP_IDENTIFIER_IOS: ${{ vars.APP_IDENTIFIER_IOS }}
+      APP_IDENTIFIER_WATCH: ${{ vars.APP_IDENTIFIER_WATCH }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_URL: ${{ github.server_url }}/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare match git auth
+        run: |
+          AUTH=$(printf 'x-access-token:%s' "${{ github.token }}" | base64 | tr -d '\n')
+          echo "MATCH_GIT_BASIC_AUTHORIZATION=$AUTH" >> "$GITHUB_ENV"
+
+      - name: Install fastlane
+        run: |
+          bundle config path vendor/bundle
+          bundle install --jobs 4 --retry 3
+
+      - name: Create certificates & profiles
+        run: bundle exec fastlane signing_bootstrap

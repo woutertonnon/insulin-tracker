@@ -1,0 +1,7 @@
+# match stores the encrypted signing cert + profiles on a dedicated branch
+# of THIS repo (no second repo needed). Auth uses the built-in GitHub token.
+git_url(ENV["MATCH_GIT_URL"])
+git_branch("certs")
+storage_mode("git")
+type("appstore")
+app_identifier([ENV["APP_IDENTIFIER_IOS"], ENV["APP_IDENTIFIER_WATCH"]])

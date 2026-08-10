@@ -3,6 +3,10 @@ default_platform(:ios)
 PROJECT = "InsulinTracker.xcodeproj"
 SCHEME  = "InsulinTracker-iOS"
 
+def app_ids
+  [ENV["APP_IDENTIFIER_IOS"], ENV["APP_IDENTIFIER_WATCH"]]
+end
+
 def load_api_key
   app_store_connect_api_key(
     key_id: ENV["ASC_KEY_ID"],
@@ -19,33 +23,34 @@ platform :ios do
     load_api_key
   end
 
-  # Build the app and upload it to TestFlight.
-  # Signing is fully automatic: Xcode creates/downloads a cloud-managed
-  # distribution certificate and App Store profiles using the API key
-  # (-allowProvisioningUpdates). No certs repo, no match.
+  # Run ONCE (via the "Set up signing" workflow) to create the distribution
+  # certificate + App Store profiles and push them, encrypted, to the `certs`
+  # branch of this repo.
+  desc "Create/refresh signing assets on the certs branch"
+  lane :signing_bootstrap do
+    match(type: "appstore", app_identifier: app_ids, readonly: false)
+  end
+
+  # Build the app with the match-managed distribution profiles and upload it
+  # to TestFlight.
   desc "Build and upload to TestFlight"
   lane :beta do
-    build_number = ENV["GITHUB_RUN_NUMBER"] || "1"
+    match(type: "appstore", app_identifier: app_ids, readonly: true)
 
-    # Credentials for xcodebuild's cloud-managed signing (-allowProvisioningUpdates).
-    # These let Xcode authenticate to Apple and create the distribution cert +
-    # App Store profiles on the fly. fastlane's API key alone does NOT reach the
-    # xcodebuild archive step, so we pass it explicitly here.
-    auth = [
-      "-allowProvisioningUpdates",
-      "-authenticationKeyPath #{ENV['ASC_KEY_PATH']}",
-      "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
-      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
-    ].join(" ")
+    build_number = ENV["GITHUB_RUN_NUMBER"] || "1"
 
     build_app(
       project: PROJECT,
       scheme: SCHEME,
       export_method: "app-store",
-      xcargs: "CURRENT_PROJECT_VERSION=#{build_number} DEVELOPMENT_TEAM=#{ENV['DEVELOPMENT_TEAM']} #{auth}",
+      xcargs: "CURRENT_PROJECT_VERSION=#{build_number} DEVELOPMENT_TEAM=#{ENV['DEVELOPMENT_TEAM']}",
       export_options: {
-        signingStyle: "automatic",
-        teamID: ENV["DEVELOPMENT_TEAM"]
+        signingStyle: "manual",
+        teamID: ENV["DEVELOPMENT_TEAM"],
+        provisioningProfiles: {
+          ENV["APP_IDENTIFIER_IOS"]   => "match AppStore #{ENV['APP_IDENTIFIER_IOS']}",
+          ENV["APP_IDENTIFIER_WATCH"] => "match AppStore #{ENV['APP_IDENTIFIER_WATCH']}"
+        }
       }
     )
 
