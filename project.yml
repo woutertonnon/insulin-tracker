@@ -30,8 +30,6 @@ targets:
     sources:
       - path: iOSApp
       - path: Shared
-    info:
-      path: iOSApp/Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(IOS_APP_BUNDLE_ID)
@@ -39,6 +37,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: iOSApp/Info.plist
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Apple Distribution"
         PROVISIONING_PROFILE_SPECIFIER: "match AppStore $(IOS_APP_BUNDLE_ID)"
@@ -53,8 +52,6 @@ targets:
     sources:
       - path: WatchApp
       - path: Shared
-    info:
-      path: WatchApp/Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(WATCH_APP_BUNDLE_ID)
@@ -62,6 +59,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: WatchApp/Info.plist
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "Apple Distribution"
         PROVISIONING_PROFILE_SPECIFIER: "match AppStore $(WATCH_APP_BUNDLE_ID)"
