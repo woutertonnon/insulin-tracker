@@ -1,0 +1,3 @@
+app_identifier(ENV["APP_IDENTIFIER_IOS"])
+apple_id(ENV["APPLE_ID"]) # optional; API key auth is used instead
+team_id(ENV["DEVELOPMENT_TEAM"])
