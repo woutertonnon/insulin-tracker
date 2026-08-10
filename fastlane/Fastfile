@@ -27,11 +27,22 @@ platform :ios do
   lane :beta do
     build_number = ENV["GITHUB_RUN_NUMBER"] || "1"
 
+    # Credentials for xcodebuild's cloud-managed signing (-allowProvisioningUpdates).
+    # These let Xcode authenticate to Apple and create the distribution cert +
+    # App Store profiles on the fly. fastlane's API key alone does NOT reach the
+    # xcodebuild archive step, so we pass it explicitly here.
+    auth = [
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath #{ENV['ASC_KEY_PATH']}",
+      "-authenticationKeyID #{ENV['ASC_KEY_ID']}",
+      "-authenticationKeyIssuerID #{ENV['ASC_ISSUER_ID']}",
+    ].join(" ")
+
     build_app(
       project: PROJECT,
       scheme: SCHEME,
       export_method: "app-store",
-      xcargs: "CURRENT_PROJECT_VERSION=#{build_number} DEVELOPMENT_TEAM=#{ENV['DEVELOPMENT_TEAM']} -allowProvisioningUpdates",
+      xcargs: "CURRENT_PROJECT_VERSION=#{build_number} DEVELOPMENT_TEAM=#{ENV['DEVELOPMENT_TEAM']} #{auth}",
       export_options: {
         signingStyle: "automatic",
         teamID: ENV["DEVELOPMENT_TEAM"]

@@ -38,6 +38,11 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Write App Store Connect API key to disk
+        run: |
+          echo "$ASC_KEY_CONTENT" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
       - name: Cache bundler
         uses: actions/cache@v4
         with:
