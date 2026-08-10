@@ -34,8 +34,8 @@ WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: read-only history list
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
 Config.xcconfig    ← EDIT THIS: team id + bundle ids
-fastlane/          Build + TestFlight upload (cloud-managed signing)
-.github/workflows/ CI: build on a macOS runner, ship to TestFlight
+fastlane/          match signing + build + TestFlight upload
+.github/workflows/ CI: setup-signing (run once) + deploy to TestFlight
 scripts/make_icon.py  Generates the placeholder app icon
 ```
 
@@ -66,18 +66,15 @@ using the **iOS** bundle id (the watch app ships embedded inside it).
 ### 3. Create an App Store Connect API key
 
 App Store Connect → **Users and Access → Integrations → App Store Connect API →
-Team Keys → +**. Give it the **App Manager** role. Download the `AuthKey_XXXX.p8`
-(you can only download it once). Note the **Key ID** and **Issuer ID**.
+Team Keys → +**. Give it the **Admin** role — this is required so `fastlane match`
+can create the distribution certificate. Download the `AuthKey_XXXX.p8` (you can only
+download it once). Note the **Key ID** and **Issuer ID**.
 
 Base64-encode the key for the secret:
 
 ```bash
 base64 -i AuthKey_XXXX.p8 | tr -d '\n'
 ```
-
-Signing is fully **cloud-managed** — Xcode creates and downloads the distribution
-certificate and App Store profiles automatically using this API key. There is **no
-certs repo and no `match`** to set up.
 
 ### 4. Add GitHub **secrets** and **variables**
 
@@ -90,6 +87,7 @@ In your app repo → **Settings → Secrets and variables → Actions**.
 | `ASC_KEY_ID` | API Key ID from step 3 |
 | `ASC_ISSUER_ID` | Issuer ID from step 3 |
 | `ASC_KEY_CONTENT` | base64 of the `.p8` (step 3) |
+| `MATCH_PASSWORD` | any passphrase — encrypts the signing assets stored on the `certs` branch |
 
 **Variables** (Variables tab — must match `Config.xcconfig`):
 
@@ -99,13 +97,25 @@ In your app repo → **Settings → Secrets and variables → Actions**.
 | `APP_IDENTIFIER_IOS` | your iOS bundle id |
 | `APP_IDENTIFIER_WATCH` | your watch bundle id |
 
-### 5. Ship it
+> **Signing model:** `fastlane match` generates the distribution certificate + App
+> Store profiles once and stores them **encrypted on a `certs` branch of this repo**
+> (no second repo, no PAT — it authenticates with the built-in `GITHUB_TOKEN`).
+> Cloud/automatic signing does **not** work reliably on throwaway CI runners, which
+> is why match is used.
+
+### 5. Bootstrap signing (run once)
+
+**Actions → "Set up signing (run once)" → Run workflow.** This creates the cert +
+profiles and pushes them to the `certs` branch. You only rerun this if the cert is
+revoked or expires.
+
+### 6. Ship it
 
 Push to `main` (or **Actions → "Deploy to TestFlight" → Run workflow**). The build
 lands in TestFlight in ~10–20 min after Apple finishes processing. Install via the
 **TestFlight** app on your iPhone; the watch app installs from the iPhone's Watch app.
 
-### 6. Assign the Action Button (on the watch)
+### 7. Assign the Action Button (on the watch)
 
 On the Watch Ultra: **Settings → Action Button → Action → Open App → Insulin**.
 Now a single press of the Action Button from anywhere opens straight to the dial.
@@ -124,5 +134,8 @@ Now a single press of the Action Button from anywhere opens straight to the dial
   re-run `python3 scripts/make_icon.py`.
 - **Free provisioning** isn't used here — TestFlight requires a paid Developer account
   (which you have), and builds don't expire the way sideloaded ones do.
-- I can't compile this from the Linux dev box, so the first CI run may surface a
-  small signing/config tweak. Paste any red build log back and I'll fix it.
+- **Xcode/SDK:** the deploy workflow uses `latest-stable` Xcode on `macos-15`.
+  Apple requires builds to use a current SDK (iOS 26+ as of Aug 2026); if uploads
+  start getting rejected for an "SDK version issue", that runner/Xcode is the knob.
+- **Export compliance:** `ITSAppUsesNonExemptEncryption=false` is set so builds are
+  immediately available to testers (the app uses no non-exempt encryption).
