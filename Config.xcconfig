@@ -2,11 +2,12 @@
 //  EDIT THESE THREE VALUES, then commit. Everything else derives from them.
 // ===========================================================================
 
-// Your Apple Developer Team ID (App Store Connect → Membership → Team ID).
+// Your Apple Developer Team ID. In CI this is injected from the GitHub
+// `DEVELOPMENT_TEAM` variable (this placeholder is only used for local builds).
 DEVELOPMENT_TEAM = REPLACE_TEAM_ID
 
 // The iOS app bundle id. Must be globally unique and registered on the portal.
-IOS_APP_BUNDLE_ID = com.REPLACE_ME.insulintracker
+IOS_APP_BUNDLE_ID = com.woutertonnon.insulintracker
 
 // The watch app bundle id. Convention: <iOS id>.watchkitapp
-WATCH_APP_BUNDLE_ID = com.REPLACE_ME.insulintracker.watchkitapp
+WATCH_APP_BUNDLE_ID = com.woutertonnon.insulintracker.watchkitapp
