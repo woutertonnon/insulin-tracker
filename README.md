@@ -127,8 +127,9 @@ Now a single press of the Action Button from anywhere opens straight to the dial
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store
   disallows it). "Do nothing" simply saves nothing; dropping your wrist backgrounds
   the app. Reopening always starts fresh at the neutral screen.
-- **Ranges:** carbs 10–400 g, insulin 0.5–20 U. Adjust `maxSteps` in
-  `WatchApp/DialView.swift` to change them.
+- **Ranges:** carbs use a fine-at-the-low-end ladder (1–10 by 1, then 15/20/25/30,
+  then by 10 up to 200 g); insulin is 0.5–20 U. Adjust `carbLadder` /
+  `insulinMaxSteps` in `WatchApp/DialView.swift` to change them.
 - **Replace the icon:** drop your own 1024×1024 PNG over
   `iOSApp/Assets.xcassets/AppIcon.appiconset/icon-1024.png` (and the watch one), or
   re-run `python3 scripts/make_icon.py`.

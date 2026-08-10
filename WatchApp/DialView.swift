@@ -27,10 +27,23 @@ struct DialView: View {
 
     private let autoSaveDelay: Duration = .seconds(3)
 
-    // Dial range: up to 400 g carbs (40 * 10) and 20 U insulin (40 * 0.5).
-    private let maxSteps = 40.0
+    /// Carb amounts (g), finer at the low end where precision matters:
+    /// 1…10 by 1, then 15/20/25/30, then by 10 up to 200.
+    private static let carbLadder: [Int] =
+        Array(1...10)
+        + Array(stride(from: 15, through: 30, by: 5))
+        + Array(stride(from: 40, through: 200, by: 10))
+
+    /// Insulin: 40 half-unit steps = up to 20 U.
+    private let insulinMaxSteps = 40
 
     private var step: Int { Int(index.rounded()) }
+
+    /// Carbs (g) for a positive crown step, using the fine-grained ladder.
+    private func carbs(for positiveStep: Int) -> Int {
+        let i = min(max(positiveStep, 1), Self.carbLadder.count)
+        return Self.carbLadder[i - 1]
+    }
 
     private var lastInsulin: LogEntry? {
         allEntries.first { $0.kind == .insulin }
@@ -47,8 +60,8 @@ struct DialView: View {
         .focusable(true)
         .digitalCrownRotation(
             $index,
-            from: -maxSteps,
-            through: maxSteps,
+            from: -Double(insulinMaxSteps),
+            through: Double(Self.carbLadder.count),
             by: 1,
             sensitivity: .low,
             isContinuous: false,
@@ -69,7 +82,7 @@ struct DialView: View {
     private var dialContent: some View {
         if step > 0 {
             valueView(title: "CARBS",
-                      value: "\(step * 10)",
+                      value: "\(carbs(for: step))",
                       unit: "g",
                       color: .orange,
                       systemImage: "fork.knife")
@@ -176,7 +189,7 @@ struct DialView: View {
 
         let entry: LogEntry
         if s > 0 {
-            entry = LogEntry(timestamp: .now, kind: .carbs, amount: Double(s * 10))
+            entry = LogEntry(timestamp: .now, kind: .carbs, amount: Double(carbs(for: s)))
         } else {
             entry = LogEntry(timestamp: .now, kind: .insulin, amount: Double(-s) * 0.5)
         }
