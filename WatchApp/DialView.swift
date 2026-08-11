@@ -28,6 +28,10 @@ struct DialView: View {
 
     private let autoSaveDelay: Duration = .seconds(3)
 
+    /// Re-logging the same kind within this window edits the last entry
+    /// instead of adding a new one (correcting a mis-entry).
+    private let correctionWindow: TimeInterval = 15
+
     /// Carb amounts (g), finer at the low end where precision matters:
     /// 1…10 by 1, then 15/20/25/30, then by 10 up to 200.
     private static let carbLadder: [Int] =
@@ -218,14 +222,25 @@ struct DialView: View {
         let s = step
         guard s != 0 else { return }
 
+        let now = Date.now
+        let kind: EntryKind = s > 0 ? .carbs : .insulin
+        let amount = s > 0 ? Double(carbs(for: s)) : Double(-s) * 0.5
+
         let entry: LogEntry
-        if s > 0 {
-            entry = LogEntry(timestamp: .now, kind: .carbs, amount: Double(carbs(for: s)))
+        let wasCorrection: Bool
+        if let recent = allEntries.first(where: { $0.kind == kind }),
+           now.timeIntervalSince(recent.timestamp) <= correctionWindow {
+            // Same kind logged moments ago — treat this as a correction.
+            recent.amount = amount
+            recent.timestamp = now
+            entry = recent
+            wasCorrection = true
         } else {
-            entry = LogEntry(timestamp: .now, kind: .insulin, amount: Double(-s) * 0.5)
+            entry = LogEntry(timestamp: now, kind: kind, amount: amount)
+            context.insert(entry)
+            wasCorrection = false
         }
 
-        context.insert(entry)
         try? context.save()
         ConnectivityManager.shared.send(entry)
         WKInterfaceDevice.current().play(.success)
@@ -235,7 +250,7 @@ struct DialView: View {
         }
         WidgetCenter.shared.reloadAllTimelines()
 
-        justSaved = SavedInfo(text: "Saved \(entry.displayAmount)")
+        justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount)
 
         // Show confirmation briefly, then return to neutral.
         Task {

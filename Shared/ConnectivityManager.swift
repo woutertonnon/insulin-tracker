@@ -63,18 +63,18 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
             else { return }
 
             let context = container.mainContext
+            let date = Date(timeIntervalSince1970: ts)
 
-            // De-duplicate: skip if we already have this id.
+            // Update in place if we already have this id (a correction),
+            // otherwise insert a new entry.
             let descriptor = FetchDescriptor<LogEntry>(predicate: #Predicate { $0.id == id })
-            if let existing = try? context.fetch(descriptor), !existing.isEmpty {
-                return
+            if let existing = try? context.fetch(descriptor).first {
+                existing.amount = amount
+                existing.timestamp = date
+                existing.kindRaw = kind.rawValue
+            } else {
+                context.insert(LogEntry(id: id, timestamp: date, kind: kind, amount: amount))
             }
-
-            let entry = LogEntry(id: id,
-                                 timestamp: Date(timeIntervalSince1970: ts),
-                                 kind: kind,
-                                 amount: amount)
-            context.insert(entry)
             try? context.save()
         }
     }
