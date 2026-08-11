@@ -36,7 +36,7 @@ struct LastDoseView: View {
     var entry: LastDoseEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 1) {
             Label("Last insulin", systemImage: "syringe")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.blue)
@@ -44,16 +44,17 @@ struct LastDoseView: View {
             if let units = entry.units, let doseDate = entry.doseDate {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(unitsString(units))
-                        .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
+                        .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
                     Text("U")
                         .font(.headline)
                         .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Text(doseDate, style: .timer)
-                        .font(.system(.title3, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
                 }
+                // Full-width own line so the elapsed time never truncates.
+                Text(doseDate, style: .timer)
+                    .font(.system(.body, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             } else {
                 Text("No dose logged yet")
                     .font(.footnote)
