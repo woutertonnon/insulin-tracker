@@ -22,6 +22,7 @@ jobs:
       DEVELOPMENT_TEAM: ${{ vars.DEVELOPMENT_TEAM }}
       APP_IDENTIFIER_IOS: ${{ vars.APP_IDENTIFIER_IOS }}
       APP_IDENTIFIER_WATCH: ${{ vars.APP_IDENTIFIER_WATCH }}
+      APP_IDENTIFIER_WIDGET: ${{ vars.APP_IDENTIFIER_WIDGET }}
       # ---- App Store Connect API key ----
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}

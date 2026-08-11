@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import WatchKit
+import WidgetKit
 
 /// The single-screen logging UI.
 ///
@@ -73,7 +74,19 @@ struct DialView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { resetToNeutral() }
         }
-        .onAppear { resetToNeutral() }
+        .onAppear {
+            resetToNeutral()
+            syncWidgetFromHistory()
+        }
+    }
+
+    /// Seed the complication from existing data so it's populated even before
+    /// the next dose is logged in this session.
+    private func syncWidgetFromHistory() {
+        if let last = lastInsulin {
+            SharedStore.setLastInsulin(units: last.amount, date: last.timestamp)
+        }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     // MARK: - Subviews
@@ -198,6 +211,11 @@ struct DialView: View {
         try? context.save()
         ConnectivityManager.shared.send(entry)
         WKInterfaceDevice.current().play(.success)
+
+        if entry.kind == .insulin {
+            SharedStore.setLastInsulin(units: entry.amount, date: entry.timestamp)
+        }
+        WidgetCenter.shared.reloadAllTimelines()
 
         justSaved = SavedInfo(text: "Saved \(entry.displayAmount)")
 

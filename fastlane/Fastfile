@@ -4,7 +4,7 @@ PROJECT = "InsulinTracker.xcodeproj"
 SCHEME  = "InsulinTracker-iOS"
 
 def app_ids
-  [ENV["APP_IDENTIFIER_IOS"], ENV["APP_IDENTIFIER_WATCH"]]
+  [ENV["APP_IDENTIFIER_IOS"], ENV["APP_IDENTIFIER_WATCH"], ENV["APP_IDENTIFIER_WIDGET"]].compact
 end
 
 def load_api_key
@@ -28,7 +28,9 @@ platform :ios do
   # branch of this repo.
   desc "Create/refresh signing assets on the certs branch"
   lane :signing_bootstrap do
-    match(type: "appstore", app_identifier: app_ids, readonly: false)
+    # force: regenerate profiles so newly-enabled capabilities (e.g. App Groups)
+    # and any new bundle ids are picked up.
+    match(type: "appstore", app_identifier: app_ids, readonly: false, force: true)
   end
 
   # Build the app with the match-managed distribution profiles and upload it
@@ -48,8 +50,9 @@ platform :ios do
         signingStyle: "manual",
         teamID: ENV["DEVELOPMENT_TEAM"],
         provisioningProfiles: {
-          ENV["APP_IDENTIFIER_IOS"]   => "match AppStore #{ENV['APP_IDENTIFIER_IOS']}",
-          ENV["APP_IDENTIFIER_WATCH"] => "match AppStore #{ENV['APP_IDENTIFIER_WATCH']}"
+          ENV["APP_IDENTIFIER_IOS"]    => "match AppStore #{ENV['APP_IDENTIFIER_IOS']}",
+          ENV["APP_IDENTIFIER_WATCH"]  => "match AppStore #{ENV['APP_IDENTIFIER_WATCH']}",
+          ENV["APP_IDENTIFIER_WIDGET"] => "match AppStore #{ENV['APP_IDENTIFIER_WIDGET']}"
         }
       }
     )
