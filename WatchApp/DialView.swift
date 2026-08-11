@@ -72,7 +72,16 @@ struct DialView: View {
             scheduleSave()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { resetToNeutral() }
+            switch phase {
+            case .active:
+                resetToNeutral()
+            case .inactive, .background:
+                // Wrist-down / screen-off before the 3s timer fired — commit
+                // the current value now so it isn't lost.
+                flushPendingSave()
+            default:
+                break
+            }
         }
         .onAppear {
             resetToNeutral()
@@ -183,6 +192,15 @@ struct DialView: View {
     private func insulinString(_ steps: Int) -> String {
         let units = Double(steps) * 0.5
         return units == units.rounded() ? String(Int(units)) : String(format: "%.1f", units)
+    }
+
+    /// Save immediately if there's a dialed-but-not-yet-saved value. Used when
+    /// the app is about to background so a pending entry isn't dropped.
+    @MainActor
+    private func flushPendingSave() {
+        guard step != 0, justSaved == nil else { return }
+        pendingSave?.cancel()
+        save()
     }
 
     private func scheduleSave() {
