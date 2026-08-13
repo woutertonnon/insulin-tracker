@@ -68,17 +68,25 @@ struct InsulinOnBoardView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if lastBolus != nil {
+            if let last = lastBolus {
                 // The chart takes the whole complication…
                 chart
-                // …and IOB sits in the top-right corner, which the curve never
-                // reaches: every dose is under 4 h old, so activity has always
-                // decayed to zero by the right edge of the window.
-                Text("\(InsulinMath.format(iob)) U IOB")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.blue)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                // …and the readouts sit in the top-right corner, which the
+                // curve never reaches: every dose is under 4 h old, so activity
+                // has always decayed to zero by the right edge of the window.
+                // Right-aligned so they hug the emptiest part of the plot.
+                VStack(alignment: .trailing, spacing: -1) {
+                    Text("\(InsulinMath.format(iob)) U IOB")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.blue)
+                    // Time since the last bolus — ticks on its own.
+                    Text(last.date, style: .timer)
+                        .font(.system(size: 9, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             } else {
                 Label("No dose logged yet", systemImage: "syringe")
                     .font(.caption2)

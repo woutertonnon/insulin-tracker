@@ -185,9 +185,10 @@ swap it back in if you prefer the book's own numbers.
 ### The complication
 
 `.accessoryRectangular`, given over entirely to the 4-hour activity forecast, with
-**IOB overlaid in the top-right corner**. That corner is free by construction: no
-bolus on board is more than 4 h old, so the curve has always decayed to zero by
-the right edge of the window — nothing can ever be drawn there.
+**IOB overlaid in the top-right corner** and the ticking time-since-last-bolus
+smaller underneath it. That corner is free by construction: no bolus on board is
+more than 4 h old, so the curve has always decayed to zero by the right edge of
+the window — nothing can ever be drawn there.
 
 The axes are **fixed** — 0–5 U vertically, 4 hours horizontally — so the curve's
 height and slope mean the same thing at every glance instead of being rescaled by
