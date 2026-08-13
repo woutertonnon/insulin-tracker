@@ -28,9 +28,13 @@ struct InsulinProvider: TimelineProvider {
         let doses = SharedStore.bolusDoses()
         let now = Date.now
 
-        // Cover the decay of everything still on board; if nothing is active,
-        // one entry is enough until the next dose triggers a reload.
-        let end = InsulinMath.lastActiveUntil(doses, at: now) ?? now
+        // Cover the decay of everything still on board — and at least two hours
+        // regardless, because the elapsed-time readout is drawn per entry now
+        // rather than ticking on its own, so it would otherwise sit frozen
+        // whenever no insulin is active.
+        let active = InsulinMath.lastActiveUntil(doses, at: now) ?? now
+        let end = max(active, now.addingTimeInterval(2 * 3600))
+
         var entries: [InsulinEntry] = []
         var t = now
         while t <= end && entries.count < 100 {
@@ -41,8 +45,7 @@ struct InsulinProvider: TimelineProvider {
             entries = [InsulinEntry(date: now, doses: doses)]
         }
 
-        let next = max(end, now.addingTimeInterval(30 * 60))
-        completion(Timeline(entries: entries, policy: .after(next)))
+        completion(Timeline(entries: entries, policy: .after(end)))
     }
 }
 
@@ -53,12 +56,37 @@ struct InsulinOnBoardView: View {
     private static let unitsCeiling: Double = 5
     private static let span: TimeInterval = 4 * 3600
 
-    /// The longest string the timer can show, and the IOB line it is sized to
-    /// match. Both are references, not live values — that is the whole point:
-    /// the timer's point size must not move when the elapsed time ticks past
-    /// an hour, or when the IOB figure gains a digit.
-    private static let timerReference = "9:00:00"
-    private static let iobReference = "8 U IOB"
+    /// Reference strings for the width calibration. Both lines are rendered at
+    /// a **fixed character count** — the IOB figure in a padded 4-wide field,
+    /// the elapsed time as zero-padded `HH:MM` — so these are not merely
+    /// representative, they are exactly as wide as what gets drawn, always.
+    /// That is what lets one calibration hold for every value.
+    private static let timerReference = "00:00"
+    private static let iobReference = "00.0 U IOB"
+
+    /// Figure space: same advance as a digit, so padding with it keeps the
+    /// field width constant without drawing anything.
+    private static let figureSpace = "\u{2007}"
+
+    /// IOB to one decimal in a fixed 4-character field: "␣0.9", "12.5".
+    private var iobText: String {
+        let value = String(format: "%.1f", min(max(iob, 0), 99.9))
+        let pad = String(repeating: Self.figureSpace, count: max(0, 4 - value.count))
+        return "\(pad)\(value) U IOB"
+    }
+
+    /// Time since the last bolus as fixed-width `HH:MM`.
+    ///
+    /// Rendered rather than using `Text(style: .timer)`: the system timer's
+    /// string changes length as it passes an hour, and its content cannot be
+    /// observed, so nothing can ever be sized to match it. This updates with
+    /// the timeline instead — every five minutes rather than every second.
+    private func elapsedText(since date: Date) -> String {
+        let seconds = max(0, Int(entry.date.timeIntervalSince(date)))
+        let hours = min(seconds / 3600, 99)
+        let minutes = (seconds % 3600) / 60
+        return String(format: "%02d:%02d", hours, minutes)
+    }
 
     /// Point size at which `timerReference` in monospaced digits is exactly as
     /// wide as `iobReference` in the IOB line's font.
@@ -112,24 +140,21 @@ struct InsulinOnBoardView: View {
                 // has always decayed to zero by the right edge of the window.
                 // Right-aligned so they hug the emptiest part of the plot.
                 VStack(alignment: .trailing, spacing: -1) {
-                    // Monospaced digits so "1 U IOB" is exactly as wide as
-                    // "8 U IOB" — with proportional figures the 1 is narrower,
-                    // and the timer calibrated against 8 would overhang it.
-                    Text("\(InsulinMath.format(iob)) U IOB")
+                    // Monospaced digits throughout: with proportional figures a
+                    // 1 is narrower than an 8, which alone would break the
+                    // width match between these two lines.
+                    Text(iobText)
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.blue)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    // Time since the last bolus — ticks on its own. Fixed
-                    // point size, so "59:00" and "1:59:00" render identically;
-                    // no minimumScaleFactor here, or the text would resize
-                    // itself the moment it crossed the hour.
-                    Text(last.date, style: .timer)
+                    // Sized once so this spans the line above exactly. No
+                    // minimumScaleFactor — both strings are fixed-width, so
+                    // there is nothing left to scale away from.
+                    Text(elapsedText(since: last.date))
                         .font(.system(size: Self.timerFontSize).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .fixedSize()
-                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 // Sizes the stack to its widest line rather than to the whole
                 // complication, so the timer right-aligns under the IOB label.
