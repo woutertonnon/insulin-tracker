@@ -28,10 +28,9 @@ struct InsulinProvider: TimelineProvider {
         let doses = SharedStore.bolusDoses()
         let now = Date.now
 
-        // Cover the decay of everything still on board — and at least two hours
-        // regardless, because the elapsed-time readout is drawn per entry now
-        // rather than ticking on its own, so it would otherwise sit frozen
-        // whenever no insulin is active.
+        // Cover the decay of everything still on board. The two-hour floor is
+        // just to keep idle reloads rare — the elapsed readout ticks on its own
+        // and IOB does not move once nothing is active.
         let active = InsulinMath.lastActiveUntil(doses, at: now) ?? now
         let end = max(active, now.addingTimeInterval(2 * 3600))
 
@@ -61,8 +60,13 @@ struct InsulinOnBoardView: View {
     /// the elapsed time as zero-padded `HH:MM` — so these are not merely
     /// representative, they are exactly as wide as what gets drawn, always.
     /// That is what lets one calibration hold for every value.
-    private static let timerReference = "00:00"
+    private static let timerReference = "0:00:00"
     private static let iobReference = "00.0 U IOB"
+
+    /// Range end for the ticking timer. Only its start matters — the system
+    /// counts up from there — but the range has to outlast any plausible gap
+    /// between doses.
+    private static let timerSpan: TimeInterval = 99 * 3600
 
     /// Figure space: same advance as a digit, so padding with it keeps the
     /// field width constant without drawing anything.
@@ -75,17 +79,17 @@ struct InsulinOnBoardView: View {
         return "\(pad)\(value) U IOB"
     }
 
-    /// Time since the last bolus as fixed-width `HH:MM`.
+    /// Time since the last bolus, ticking every second and still fixed-width.
     ///
-    /// Rendered rather than using `Text(style: .timer)`: the system timer's
-    /// string changes length as it passes an hour, and its content cannot be
-    /// observed, so nothing can ever be sized to match it. This updates with
-    /// the timeline instead — every five minutes rather than every second.
-    private func elapsedText(since date: Date) -> String {
-        let seconds = max(0, Int(entry.date.timeIntervalSince(date)))
-        let hours = min(seconds / 3600, 99)
-        let minutes = (seconds % 3600) / 60
-        return String(format: "%02d:%02d", hours, minutes)
+    /// `Text(style: .timer)` was the problem: it drops the hours field under an
+    /// hour, so the string changes length as it runs. This initialiser's
+    /// `showsHours` keeps `H:MM:SS` throughout, which is both live and a
+    /// constant seven characters.
+    private func timerText(since date: Date) -> Text {
+        Text(timerInterval: date...date.addingTimeInterval(Self.timerSpan),
+             pauseTime: nil,
+             countsDown: false,
+             showsHours: true)
     }
 
     /// Point size at which `timerReference` in monospaced digits is exactly as
@@ -150,7 +154,7 @@ struct InsulinOnBoardView: View {
                     // Sized once so this spans the line above exactly. No
                     // minimumScaleFactor — both strings are fixed-width, so
                     // there is nothing left to scale away from.
-                    Text(elapsedText(since: last.date))
+                    timerText(since: last.date)
                         .font(.system(size: Self.timerFontSize).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
