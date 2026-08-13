@@ -72,8 +72,11 @@ struct InsulinOnBoardView: View {
     private static var timerFontSize: CGFloat {
         let probeSize: CGFloat = 10
 
+        // Must mirror the IOB line exactly, monospaced digits included, or the
+        // measurement describes a string that is never actually drawn.
         let caption2 = UIFont.preferredFont(forTextStyle: .caption2)
-        let iobFont = UIFont.systemFont(ofSize: caption2.pointSize, weight: .semibold)
+        let iobFont = UIFont.monospacedDigitSystemFont(ofSize: caption2.pointSize,
+                                                       weight: .semibold)
         let targetWidth = (iobReference as NSString)
             .size(withAttributes: [.font: iobFont]).width
 
@@ -109,8 +112,11 @@ struct InsulinOnBoardView: View {
                 // has always decayed to zero by the right edge of the window.
                 // Right-aligned so they hug the emptiest part of the plot.
                 VStack(alignment: .trailing, spacing: -1) {
+                    // Monospaced digits so "1 U IOB" is exactly as wide as
+                    // "8 U IOB" — with proportional figures the 1 is narrower,
+                    // and the timer calibrated against 8 would overhang it.
                     Text("\(InsulinMath.format(iob)) U IOB")
-                        .font(.caption2.weight(.semibold))
+                        .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.blue)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
