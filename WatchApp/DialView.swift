@@ -129,6 +129,8 @@ struct DialView: View {
             switch phase {
             case .active:
                 resetToNeutral()
+                // Repair the complication if a push was missed while away.
+                syncWidget()
             case .inactive, .background:
                 // Wrist-down / screen-off before the 3s timer fired — commit
                 // the current value now so it isn't lost.

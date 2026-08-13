@@ -7,13 +7,18 @@ import WidgetKit
 
 /// Keeps the Watch and iPhone stores in step over WatchConnectivity.
 ///
-/// This is device-to-device (Bluetooth/Wi-Fi), NOT cloud. `transferUserInfo`
-/// queues reliably in the background and is delivered even if the counterpart
-/// is not reachable at the moment of the edit.
+/// This is device-to-device (Bluetooth/Wi-Fi), NOT cloud.
 ///
-/// Sync runs **both ways**: the watch pushes what you log, and the phone pushes
-/// edits and deletions back so the watch's store — and therefore the
-/// complication, which reads its IOB from that store — stays correct.
+/// Two channels, deliberately:
+///
+/// * **Per-entry transfers** (`transferUserInfo`) carry individual adds, edits
+///   and deletions so each device's own history stays complete. Queued and
+///   delivered in order, but any one of them can be delayed.
+/// * **A whole-list snapshot** (`updateApplicationContext`) carries every bolus
+///   still relevant to the complication. This is what the complication actually
+///   depends on, and it is self-healing: the context always holds the current
+///   state, so a single delivery repairs any amount of earlier drift. Nothing
+///   has to arrive in order, and nothing is lost if a transfer is dropped.
 final class ConnectivityManager: NSObject, WCSessionDelegate {
     static let shared = ConnectivityManager()
 
@@ -21,11 +26,20 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     /// UI reads from.
     var modelContainer: ModelContainer?
 
+    /// Payloads raised before the session finished activating. Activation is
+    /// asynchronous, so an edit made moments after launch would otherwise be
+    /// dropped on the floor.
+    private var pending: [[String: Any]] = []
+    private let lock = NSLock()
+
     private enum Op {
         static let key = "op"
         static let upsert = "upsert"
         static let delete = "delete"
     }
+
+    /// Key for the whole-list snapshot, as a flat `[timestamp, units, …]`.
+    private static let snapshotKey = "boluses"
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -54,11 +68,40 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         ])
     }
 
-    private func transfer(_ payload: [String: Any]) {
+    /// Publish the complete bolus list the complication needs. Safe to call
+    /// after any change — it replaces whatever was there.
+    @MainActor
+    func pushBolusSnapshot() {
+        guard let container = modelContainer else { return }
+        let all = (try? container.mainContext.fetch(FetchDescriptor<LogEntry>())) ?? []
+        let flat = all
+            .filter { $0.kind == .insulin }
+            .sorted { $0.timestamp < $1.timestamp }
+            .flatMap { [$0.timestamp.timeIntervalSince1970, $0.amount] }
+
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated else { return }
+        // Throws only if the session is not activated, which is guarded above.
+        try? session.updateApplicationContext([Self.snapshotKey: flat])
+    }
 
+    private func transfer(_ payload: [String: Any]) {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+
+        guard session.activationState == .activated else {
+            lock.lock()
+            pending.append(payload)
+            lock.unlock()
+            session.activate()
+            return
+        }
+
+        deliver(payload, on: session)
+    }
+
+    private func deliver(_ payload: [String: Any], on session: WCSession) {
         #if os(iOS)
         // The watch's complication is the thing that goes stale, so use the
         // complication-priority channel when the budget allows — it wakes the
@@ -74,11 +117,29 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         session.transferUserInfo(payload)
     }
 
+    private func flushPending(on session: WCSession) {
+        lock.lock()
+        let queued = pending
+        pending.removeAll()
+        lock.unlock()
+        for payload in queued {
+            deliver(payload, on: session)
+        }
+    }
+
     // MARK: - WCSessionDelegate
 
     func session(_ session: WCSession,
                  activationDidCompleteWith activationState: WCSessionActivationState,
-                 error: Error?) {}
+                 error: Error?) {
+        guard activationState == .activated else { return }
+        flushPending(on: session)
+        Task { @MainActor in
+            // Republish the snapshot now that we can, so a counterpart that
+            // missed earlier edits is brought up to date on connect.
+            pushBolusSnapshot()
+        }
+    }
 
     #if os(iOS)
     func sessionDidBecomeInactive(_ session: WCSession) {}
@@ -95,7 +156,31 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         }
     }
 
+    func session(_ session: WCSession, didReceiveApplicationContext context: [String: Any]) {
+        Task { @MainActor in
+            applySnapshot(context)
+        }
+    }
+
     // MARK: - Receiving
+
+    @MainActor
+    private func applySnapshot(_ context: [String: Any]) {
+        #if os(watchOS)
+        guard let flat = context[Self.snapshotKey] as? [Double] else { return }
+        var doses: [InsulinMath.Dose] = []
+        var i = 0
+        while i + 1 < flat.count {
+            doses.append(InsulinMath.Dose(units: flat[i + 1],
+                                          date: Date(timeIntervalSince1970: flat[i])))
+            i += 2
+        }
+        // Straight to the App Group the complication reads — this path does not
+        // touch SwiftData at all, so it cannot be held up by a merge.
+        SharedStore.setBolusDoses(doses)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
+    }
 
     @MainActor
     private func apply(_ userInfo: [String: Any]) {
@@ -147,12 +232,13 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     /// Republish the bolus history the complication reads, then rebuild it.
     @MainActor
     private func refreshComplication(using context: ModelContext) {
-        let insulin = EntryKind.insulin.rawValue
-        let descriptor = FetchDescriptor<LogEntry>(
-            predicate: #Predicate { $0.kindRaw == insulin },
-            sortBy: [SortDescriptor(\.timestamp)]
-        )
-        let boluses = (try? context.fetch(descriptor)) ?? []
+        // Fetched unfiltered and narrowed in Swift on purpose: a #Predicate that
+        // fails at runtime would be swallowed by try? and silently blank the
+        // complication instead of leaving it merely stale.
+        let all = (try? context.fetch(FetchDescriptor<LogEntry>())) ?? []
+        let boluses = all
+            .filter { $0.kind == .insulin }
+            .sorted { $0.timestamp < $1.timestamp }
         SharedStore.setBolusDoses(
             boluses.map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
         )

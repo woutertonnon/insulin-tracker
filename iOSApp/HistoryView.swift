@@ -96,6 +96,7 @@ struct HistoryView: View {
         try? context.save()
         // Tell the watch, so its store — and the complication's IOB — drop it too.
         ConnectivityManager.shared.sendDelete(id: id)
+        ConnectivityManager.shared.pushBolusSnapshot()
     }
 
     private struct DayGroup {
@@ -298,6 +299,7 @@ private struct EntryEditView: View {
         try? context.save()
         // Mirror the change onto the watch so the complication stays correct.
         ConnectivityManager.shared.send(saved)
+        ConnectivityManager.shared.pushBolusSnapshot()
         dismiss()
     }
 
@@ -307,6 +309,7 @@ private struct EntryEditView: View {
             context.delete(entry)
             try? context.save()
             ConnectivityManager.shared.sendDelete(id: id)
+            ConnectivityManager.shared.pushBolusSnapshot()
         }
         dismiss()
     }
