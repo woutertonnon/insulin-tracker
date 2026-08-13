@@ -1,6 +1,7 @@
 import WidgetKit
 import SwiftUI
 import Charts
+import UIKit
 
 /// The timeline entry carries the doses rather than a pre-computed curve —
 /// the view derives everything, which keeps the archived timeline small.
@@ -52,6 +53,38 @@ struct InsulinOnBoardView: View {
     private static let unitsCeiling: Double = 5
     private static let span: TimeInterval = 4 * 3600
 
+    /// The longest string the timer can show, and the IOB line it is sized to
+    /// match. Both are references, not live values — that is the whole point:
+    /// the timer's point size must not move when the elapsed time ticks past
+    /// an hour, or when the IOB figure gains a digit.
+    private static let timerReference = "9:00:00"
+    private static let iobReference = "8 U IOB"
+
+    /// Point size at which `timerReference` in monospaced digits is exactly as
+    /// wide as `iobReference` in the IOB line's font.
+    ///
+    /// Measured from the live font metrics rather than hardcoded, so it stays
+    /// correct across watch sizes and Dynamic Type settings. Monospaced-digit
+    /// advance scales linearly with point size, so one probe measurement gives
+    /// the ratio. Falls back to the probe size if metrics come back empty.
+    /// Computed per render — two text measurements is nothing, and it keeps
+    /// the value from freezing at whatever Dynamic Type was set on launch.
+    private static var timerFontSize: CGFloat {
+        let probeSize: CGFloat = 10
+
+        let caption2 = UIFont.preferredFont(forTextStyle: .caption2)
+        let iobFont = UIFont.systemFont(ofSize: caption2.pointSize, weight: .semibold)
+        let targetWidth = (iobReference as NSString)
+            .size(withAttributes: [.font: iobFont]).width
+
+        let probeFont = UIFont.monospacedDigitSystemFont(ofSize: probeSize, weight: .regular)
+        let probeWidth = (timerReference as NSString)
+            .size(withAttributes: [.font: probeFont]).width
+
+        guard probeWidth > 0, targetWidth > 0 else { return probeSize }
+        return probeSize * targetWidth / probeWidth
+    }
+
     private var iob: Double {
         InsulinMath.insulinOnBoard(entry.doses, at: entry.date)
     }
@@ -75,25 +108,26 @@ struct InsulinOnBoardView: View {
                 // curve never reaches: every dose is under 4 h old, so activity
                 // has always decayed to zero by the right edge of the window.
                 // Right-aligned so they hug the emptiest part of the plot.
-                // The IOB line sets the width of the corner block; the timer
-                // stretches to fill it, so the two lines share both edges
-                // instead of the timer sitting indented under a wider label.
                 VStack(alignment: .trailing, spacing: -1) {
                     Text("\(InsulinMath.format(iob)) U IOB")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.blue)
-                    // Time since the last bolus — ticks on its own.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    // Time since the last bolus — ticks on its own. Fixed
+                    // point size, so "59:00" and "1:59:00" render identically;
+                    // no minimumScaleFactor here, or the text would resize
+                    // itself the moment it crossed the hour.
                     Text(last.date, style: .timer)
-                        .font(.system(size: 10, design: .rounded).monospacedDigit())
+                        .font(.system(size: Self.timerFontSize).monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
+                        .lineLimit(1)
+                        .fixedSize()
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                // Sizes the stack to the IOB line rather than the whole
-                // complication, which is what gives the timer a width to fill.
+                // Sizes the stack to its widest line rather than to the whole
+                // complication, so the timer right-aligns under the IOB label.
                 .fixedSize(horizontal: true, vertical: false)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
             } else {
                 Label("No dose logged yet", systemImage: "syringe")
                     .font(.caption2)

@@ -190,6 +190,12 @@ smaller underneath it. That corner is free by construction: no bolus on board is
 more than 4 h old, so the curve has always decayed to zero by the right edge of
 the window — nothing can ever be drawn there.
 
+The timer's point size is **fixed**, calibrated so `9:00:00` is exactly as wide as
+the IOB line reads at `8 U IOB`. It is measured from live font metrics rather than
+hardcoded, so it holds across watch sizes and Dynamic Type — and deliberately
+carries no `minimumScaleFactor`, which would otherwise resize the text the moment
+the elapsed time ticked past an hour.
+
 The axes are **fixed** — 0–5 U vertically, 4 hours horizontally — so the curve's
 height and slope mean the same thing at every glance instead of being rescaled by
 whatever happens to be on board. A combined peak above 5 U flattens against the
