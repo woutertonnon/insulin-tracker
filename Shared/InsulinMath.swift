@@ -63,6 +63,67 @@ enum InsulinMath {
         interpolate(hours, x: activityHours, y: activityRates) / peakRate
     }
 
+    // MARK: - Exponential model (OpenAPS / Loop)
+
+    /// Time of peak activity for rapid-acting insulin — the OpenAPS/Loop
+    /// default for aspart/lispro/glulisine.
+    static let exponentialPeak: TimeInterval = 75 * 60
+
+    /// Duration used by the exponential model. Held at `duration` (4 h) so the
+    /// forecast agrees with the IOB shown elsewhere in the app. OpenAPS's own
+    /// default is 300 min; raising this to `5 * 3600` switches to it.
+    static var exponentialDuration: TimeInterval { duration }
+
+    /// Activity `hours` after a bolus under the biexponential model used by
+    /// OpenAPS, Loop and AndroidAPS (Dragan Maksimovic):
+    ///
+    ///     τ = tp·(1 − tp/td) / (1 − 2·tp/td)
+    ///     Ia(t) = (S/τ²)·t·(1 − t/td)·e^(−t/τ)
+    ///
+    /// Returned on the same 0…1 peak-normalised scale as `activityFraction`,
+    /// so multiplying by the dose gives units working right now. The model is
+    /// built so the peak lands exactly on `tp`, which lets the constant `S/τ²`
+    /// cancel in the normalisation.
+    static func exponentialActivityFraction(hours: Double) -> Double {
+        let td = exponentialDuration / 3600
+        let tp = exponentialPeak / 3600
+        guard hours > 0, hours < td, tp > 0, td > 2 * tp else { return 0 }
+
+        let tau = tp * (1 - tp / td) / (1 - 2 * tp / td)
+        func shape(_ t: Double) -> Double { t * (1 - t / td) * exp(-t / tau) }
+
+        let peak = shape(tp)
+        guard peak > 0 else { return 0 }
+        return shape(hours) / peak
+    }
+
+    /// Units acting at `now` under the exponential model, across stacked boluses.
+    static func exponentialActivity(_ doses: [Dose], at now: Date = .now) -> Double {
+        doses.reduce(0.0) { $0 + $1.units * exponentialActivityFraction(hours: hours(of: $1, at: now)) }
+    }
+
+    // MARK: - Forecast
+
+    /// One sampled point on the activity forecast.
+    struct ForecastPoint: Identifiable, Hashable, Sendable {
+        let date: Date
+        let units: Double
+        var id: Date { date }
+    }
+
+    /// Project insulin activity forward from `start`, sampling every `step`.
+    /// Used by the iPhone's "next 4 hours" chart.
+    static func forecast(_ doses: [Dose],
+                         from start: Date = .now,
+                         span: TimeInterval = duration,
+                         step: TimeInterval = 5 * 60) -> [ForecastPoint] {
+        guard step > 0, span > 0 else { return [] }
+        return Swift.stride(from: 0, through: span, by: step).map { offset in
+            let t = start.addingTimeInterval(offset)
+            return ForecastPoint(date: t, units: exponentialActivity(doses, at: t))
+        }
+    }
+
     // MARK: - Stacked doses
 
     /// Total insulin on board across every bolus still working — this is what

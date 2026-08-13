@@ -1,7 +1,9 @@
 import SwiftUI
 import SwiftData
+import Combine
 
-/// History of everything logged, newest first, grouped by day.
+/// History of everything logged, newest first, grouped by day, with a live
+/// forecast of insulin activity on top.
 /// Tap an entry to edit it; use ＋ to add one manually; swipe to delete.
 struct HistoryView: View {
     @Environment(\.modelContext) private var context
@@ -10,6 +12,19 @@ struct HistoryView: View {
 
     @State private var editingEntry: LogEntry?
     @State private var addingNew = false
+
+    /// Drives the forecast chart forward without a data change.
+    @State private var now: Date = .now
+    private let ticker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+
+    /// Rapid-acting boluses still working at `date`. Basal is excluded — its
+    /// action profile isn't described by this curve.
+    private func activeDoses(at date: Date) -> [InsulinMath.Dose] {
+        let cutoff = date.addingTimeInterval(-InsulinMath.duration)
+        return entries
+            .filter { $0.kind == .insulin && $0.timestamp > cutoff && $0.timestamp <= date }
+            .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -22,6 +37,17 @@ struct HistoryView: View {
                     )
                 } else {
                     List {
+                        // Live forecast of how much insulin is working, now and
+                        // over the next four hours. Only shown while something
+                        // is still active; `now` ticks so it disappears on its
+                        // own once the last dose runs out.
+                        let doses = activeDoses(at: now)
+                        if !doses.isEmpty {
+                            Section("Insulin activity — next 4 hours") {
+                                InsulinForecastChart(doses: doses, now: now)
+                            }
+                        }
+
                         ForEach(groupedByDay, id: \.day) { group in
                             Section(header: Text(group.title)) {
                                 ForEach(group.entries) { entry in
@@ -60,6 +86,7 @@ struct HistoryView: View {
             .sheet(isPresented: $addingNew) {
                 EntryEditView(entry: nil)
             }
+            .onReceive(ticker) { now = $0 }
         }
     }
 

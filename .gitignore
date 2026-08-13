@@ -27,3 +27,6 @@ AuthKey_*.p8
 
 # Reference PDFs — not source, and not ours to redistribute
 literature/
+
+# Generated reference plot, not source
+/insulin_intensity_1U.png

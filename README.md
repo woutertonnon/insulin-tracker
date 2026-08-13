@@ -149,6 +149,30 @@ action profile for rapid-acting insulin (NovoRapid / Humalog / Apidra):
 **Basal insulin is excluded from both** — long-acting insulin has a completely
 different action profile that this curve does not describe.
 
+### The iPhone forecast chart
+
+The History screen carries a live **"Insulin activity — next 4 hours"** chart that
+projects how many units will be working at each moment from now on, with stacked
+doses summed into one curve. It disappears on its own once the last dose runs out.
+
+That chart uses the **biexponential model** used by OpenAPS / Loop / AndroidAPS
+rather than the table above:
+
+```
+τ = tp·(1 − tp/td) / (1 − 2·tp/td)        Ia(t) = (S/τ²)·t·(1 − t/td)·e^(−t/τ)
+```
+
+with peak `tp` = 75 min (the OpenAPS rapid-acting default) and duration `td` = 4 h
+(held equal to `InsulinMath.duration` so the chart agrees with the IOB figures;
+OpenAPS's own default is 5 h — see `exponentialDuration`).
+
+> **The two curves are close but not identical.** Run at a 4 h duration the
+> exponential model reproduces Table 7-8's IOB to within 2–4 percentage points,
+> but it holds nearer the peak for longer — ≈0.98 vs 0.88 at 1.5 h. So the phone
+> chart and the watch complication can differ by around 0.1 U per unit dosed in
+> the 1.5–2 h window. To make them agree, point `activityFraction` at
+> `exponentialActivityFraction`.
+
 > Duration of insulin action varies per person (the book notes anywhere from
 > under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
 > it, edit the table in `Shared/InsulinMath.swift`.
