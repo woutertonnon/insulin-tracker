@@ -184,11 +184,15 @@ swap it back in if you prefer the book's own numbers.
 
 ### The complication
 
-`.accessoryRectangular`, laid out as time-since-last-bolus on the left, **IOB on
-the right**, and the 4-hour activity forecast underneath on **fixed axes** — 0–5 U
-vertically, 4 hours horizontally — so the curve's height and slope mean the same
-thing at every glance. A combined peak above 5 U flattens against the top of the
-plot; the IOB figure stays exact. Widen `unitsCeiling` in
+`.accessoryRectangular`, given over entirely to the 4-hour activity forecast, with
+**IOB overlaid in the top-right corner**. That corner is free by construction: no
+bolus on board is more than 4 h old, so the curve has always decayed to zero by
+the right edge of the window — nothing can ever be drawn there.
+
+The axes are **fixed** — 0–5 U vertically, 4 hours horizontally — so the curve's
+height and slope mean the same thing at every glance instead of being rescaled by
+whatever happens to be on board. A combined peak above 5 U flattens against the
+top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 `WidgetExtension/LastDoseWidget.swift` if you routinely stack past 5 U.
 
 > Duration of insulin action varies per person (the book notes anywhere from

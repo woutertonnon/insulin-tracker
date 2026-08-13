@@ -67,42 +67,27 @@ struct InsulinOnBoardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            topRow
+        ZStack(alignment: .topTrailing) {
             if lastBolus != nil {
+                // The chart takes the whole complication…
                 chart
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .containerBackground(for: .widget) { Color.clear }
-    }
-
-    @ViewBuilder
-    private var topRow: some View {
-        if let last = lastBolus {
-            HStack(spacing: 3) {
-                // Time since the last bolus — ticks on its own.
-                Image(systemName: "syringe")
-                    .font(.system(size: 9))
-                Text(last.date, style: .timer)
-                    .monospacedDigit()
-
-                Spacer(minLength: 2)
-
-                // IOB, top right.
+                // …and IOB sits in the top-right corner, which the curve never
+                // reaches: every dose is under 4 h old, so activity has always
+                // decayed to zero by the right edge of the window.
                 Text("\(InsulinMath.format(iob)) U IOB")
-                    .fontWeight(.semibold)
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(.blue)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            } else {
+                Label("No dose logged yet", systemImage: "syringe")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-        } else {
-            Label("No dose logged yet", systemImage: "syringe")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .containerBackground(for: .widget) { Color.clear }
     }
 
     private var chart: some View {
