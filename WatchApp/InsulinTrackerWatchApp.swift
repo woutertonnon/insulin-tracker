@@ -11,6 +11,9 @@ struct InsulinTrackerWatchApp: App {
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
+        // Same store the dial writes to, so edits pushed from the iPhone land
+        // here and the complication picks them up.
+        ConnectivityManager.shared.modelContainer = container
         ConnectivityManager.shared.activate()
     }
 

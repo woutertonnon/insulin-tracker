@@ -91,8 +91,11 @@ struct HistoryView: View {
     }
 
     private func delete(_ entry: LogEntry) {
+        let id = entry.id
         context.delete(entry)
         try? context.save()
+        // Tell the watch, so its store — and the complication's IOB — drop it too.
+        ConnectivityManager.shared.sendDelete(id: id)
     }
 
     private struct DayGroup {
@@ -282,21 +285,28 @@ private struct EntryEditView: View {
     private func save() {
         // For meals the stored amount is the size ordinal, not a quantity.
         let value = isMeal ? Double(mealSize.rawValue) : max(0, amount)
+        let saved: LogEntry
         if let entry {
             entry.kindRaw = kind.rawValue
             entry.amount = value
             entry.timestamp = timestamp
+            saved = entry
         } else {
-            context.insert(LogEntry(timestamp: timestamp, kind: kind, amount: value))
+            saved = LogEntry(timestamp: timestamp, kind: kind, amount: value)
+            context.insert(saved)
         }
         try? context.save()
+        // Mirror the change onto the watch so the complication stays correct.
+        ConnectivityManager.shared.send(saved)
         dismiss()
     }
 
     private func deleteEntry() {
         if let entry {
+            let id = entry.id
             context.delete(entry)
             try? context.save()
+            ConnectivityManager.shared.sendDelete(id: id)
         }
         dismiss()
     }
