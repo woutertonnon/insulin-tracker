@@ -10,16 +10,22 @@ No cloud, no accounts — data stays on your devices.
 
 1. Press the **Action Button** (configured to open this app — see below).
 2. Turn the **Digital Crown**:
-   - **Up** → carbs, in steps of **10 g** (10, 20, 30, …)
-   - **Down** → insulin, in steps of **0.5 U** (0.5, 1.0, 1.5, …)
-3. Stop turning. After **5 seconds** the value auto-saves with the current
+   - **Up** → first the five meal sizes (**Snack, Small, Medium, Large, Very large**),
+     then exact **carbs in grams** if you know the number
+   - **Down** → first rapid-acting **insulin** in **0.5 U** steps up to 20 U,
+     then long-acting **basal** insulin restarting at 1 U in **1 U** steps up to 60 U
+3. Stop turning. After **3 seconds** the value auto-saves with the current
    date & time, you get a checkmark + haptic, and it returns to the neutral screen.
 4. If you never turn the crown, **nothing is saved** — just drop your wrist.
 
-The **neutral screen** shows a live **"time since last insulin"** timer so you can
-avoid stacking doses. That's what you see first, before you turn the crown.
+Meal sizes carry **no gram amount** — they're stored as a size, not a guess, for the
+common case where you don't know the carb count.
 
-> One value per session (the dial is either carbs *or* insulin). To log both,
+The **neutral screen** shows live **insulin on board**, **units active right now**,
+and a ticking **time since last bolus**. That's what you see first, before you turn
+the crown.
+
+> One value per session (the dial is either food *or* insulin). To log both,
 > press the Action Button again for a second entry.
 
 **On the iPhone:** open the app to see all entries, newest first, grouped by day.
@@ -30,6 +36,7 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
+                   + InsulinMath (IOB / activity curve) + SharedStore (App Group)
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: read-only history list
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
@@ -122,14 +129,38 @@ Now a single press of the Action Button from anywhere opens straight to the dial
 
 ---
 
+## Insulin on board
+
+The complication and the watch's neutral screen show two numbers, both computed
+from **Table 7-8 of Gary Scheiner's *Think Like a Pancreas*** — the standard
+action profile for rapid-acting insulin (NovoRapid / Humalog / Apidra):
+
+| hours since bolus | 0.5 | 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 |
+|---|---|---|---|---|---|---|---|---|
+| insulin used up | 10% | 30% | 50% | 65% | 80% | 90% | 95% | 100% |
+| **still working (IOB)** | 90% | 70% | 50% | 35% | 20% | 10% | 5% | 0% |
+
+- **U on board** — every bolus from the last four hours, decayed along that curve
+  and **summed**, so stacked doses are visible rather than just the latest one.
+- **U active** — insulin *intensity*: the table's own consumption rate per
+  interval, normalised so a dose at its peak reads its full size. 1 U injected an
+  hour ago reads ≈ 1.0 U active; at 3 h ≈ 0.38; from 4 h on, zero.
+
+**Basal insulin is excluded from both** — long-acting insulin has a completely
+different action profile that this curve does not describe.
+
+> Duration of insulin action varies per person (the book notes anywhere from
+> under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
+> it, edit the table in `Shared/InsulinMath.swift`.
+
 ## Notes & limitations
 
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store
   disallows it). "Do nothing" simply saves nothing; dropping your wrist backgrounds
   the app. Reopening always starts fresh at the neutral screen.
 - **Ranges:** carbs use a fine-at-the-low-end ladder (1–10 by 1, then 15/20/25/30,
-  then by 10 up to 200 g); insulin is 0.5–20 U. Adjust `carbLadder` /
-  `insulinMaxSteps` in `WatchApp/DialView.swift` to change them.
+  then by 10 up to 200 g); bolus insulin is 0.5–20 U; basal is 1–60 U. Adjust
+  `carbLadder` / `bolusMaxSteps` / `basalMaxUnits` in `WatchApp/DialView.swift`.
 - **Replace the icon:** drop your own 1024×1024 PNG over
   `iOSApp/Assets.xcassets/AppIcon.appiconset/icon-1024.png` (and the watch one), or
   re-run `python3 scripts/make_icon.py`.

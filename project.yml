@@ -75,6 +75,7 @@ targets:
     sources:
       - path: WidgetExtension
       - path: Shared/SharedStore.swift
+      - path: Shared/InsulinMath.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(WATCH_APP_BUNDLE_ID).dosewidget

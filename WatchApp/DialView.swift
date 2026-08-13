@@ -6,9 +6,10 @@ import WidgetKit
 /// The single-screen logging UI.
 ///
 /// One Digital Crown dial:
-///   • crown UP   → carbs, in steps of 10 g  (10, 20, 30, …)
-///   • crown DOWN → insulin, in steps of 0.5 U (0.5, 1.0, 1.5, …)
-///   • center (0) → neutral, shows time since last insulin
+///   • crown UP   → first the five meal sizes, then exact carbs in grams
+///   • crown DOWN → first rapid-acting insulin (0.5 U steps, to 20 U),
+///                  then long-acting basal insulin (1 U steps, to 60 U)
+///   • center (0) → neutral, shows insulin on board + time since last bolus
 ///
 /// After you stop turning for `autoSaveDelay` seconds, the current value is
 /// saved automatically with the current date/time. If you never leave the
@@ -17,7 +18,8 @@ struct DialView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Most recent insulin entry, used for the "time since last insulin" timer.
+    /// Everything logged, newest first. Drives the IOB readout on the neutral
+    /// screen and the data pushed to the complication.
     @Query(sort: \LogEntry.timestamp, order: .reverse)
     private var allEntries: [LogEntry]
 
@@ -32,26 +34,74 @@ struct DialView: View {
     /// instead of adding a new one (correcting a mis-entry).
     private let correctionWindow: TimeInterval = 15
 
-    /// Carb amounts (g), finer at the low end where precision matters:
-    /// 1…10 by 1, then 15/20/25/30, then by 10 up to 200.
+    // MARK: - Dial ladders
+
+    /// Crown up, steps 1…5: meal sizes, for when the carb count isn't known.
+    private static let mealSizes = MealSize.allCases
+
+    /// Crown up, steps 6+: exact carb amounts (g), finer at the low end where
+    /// precision matters: 1…10 by 1, then 15/20/25/30, then by 10 up to 200.
     private static let carbLadder: [Int] =
         Array(1...10)
         + Array(stride(from: 15, through: 30, by: 5))
         + Array(stride(from: 40, through: 200, by: 10))
 
-    /// Insulin: 40 half-unit steps = up to 20 U.
-    private let insulinMaxSteps = 40
+    private static let carbMaxSteps = mealSizes.count + carbLadder.count
+
+    /// Crown down, steps 1…40: rapid-acting bolus in 0.5 U steps, up to 20 U.
+    private static let bolusMaxSteps = 40
+
+    /// Crown down, steps 41+: long-acting basal, restarting at 1 U in 1 U
+    /// steps, up to 60 U. Basal has a different action profile and is
+    /// deliberately excluded from the IOB / activity math.
+    private static let basalMaxUnits = 60
+
+    private static let insulinMaxSteps = bolusMaxSteps + basalMaxUnits
 
     private var step: Int { Int(index.rounded()) }
 
-    /// Carbs (g) for a positive crown step, using the fine-grained ladder.
-    private func carbs(for positiveStep: Int) -> Int {
-        let i = min(max(positiveStep, 1), Self.carbLadder.count)
-        return Self.carbLadder[i - 1]
+    // MARK: - Dial value decoding
+
+    /// What a positive crown step means: a meal size, or exact grams.
+    private enum CarbValue {
+        case meal(MealSize)
+        case grams(Int)
     }
 
-    private var lastInsulin: LogEntry? {
+    private func carbValue(for positiveStep: Int) -> CarbValue {
+        let s = min(max(positiveStep, 1), Self.carbMaxSteps)
+        if s <= Self.mealSizes.count {
+            return .meal(Self.mealSizes[s - 1])
+        }
+        return .grams(Self.carbLadder[s - Self.mealSizes.count - 1])
+    }
+
+    /// What a negative crown step means: a rapid-acting bolus, or basal.
+    private enum InsulinValue {
+        case bolus(Double)
+        case basal(Double)
+    }
+
+    private func insulinValue(for downSteps: Int) -> InsulinValue {
+        let s = min(max(downSteps, 1), Self.insulinMaxSteps)
+        if s <= Self.bolusMaxSteps {
+            return .bolus(Double(s) * 0.5)
+        }
+        return .basal(Double(s - Self.bolusMaxSteps))
+    }
+
+    // MARK: - Derived insulin state
+
+    private var lastBolus: LogEntry? {
         allEntries.first { $0.kind == .insulin }
+    }
+
+    /// Rapid-acting boluses only — basal is not part of the IOB model.
+    private var activeDoses: [InsulinMath.Dose] {
+        let cutoff = Date.now.addingTimeInterval(-InsulinMath.duration)
+        return allEntries
+            .filter { $0.kind == .insulin && $0.timestamp > cutoff }
+            .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
     }
 
     var body: some View {
@@ -65,8 +115,8 @@ struct DialView: View {
         .focusable(true)
         .digitalCrownRotation(
             $index,
-            from: -Double(insulinMaxSteps),
-            through: Double(Self.carbLadder.count),
+            from: -Double(Self.insulinMaxSteps),
+            through: Double(Self.carbMaxSteps),
             by: 1,
             sensitivity: .low,
             isContinuous: false,
@@ -89,16 +139,21 @@ struct DialView: View {
         }
         .onAppear {
             resetToNeutral()
-            syncWidgetFromHistory()
+            syncWidget()
         }
     }
 
-    /// Seed the complication from existing data so it's populated even before
-    /// the next dose is logged in this session.
-    private func syncWidgetFromHistory() {
-        if let last = lastInsulin {
-            SharedStore.setLastInsulin(units: last.amount, date: last.timestamp)
+    /// Push the recent bolus history into the App Group so the complication can
+    /// compute IOB itself, and nudge WidgetKit to rebuild its timeline.
+    private func syncWidget(including extra: LogEntry? = nil) {
+        var boluses = allEntries.filter { $0.kind == .insulin }
+        // A freshly-inserted entry may not be in @Query results yet.
+        if let extra, extra.kind == .insulin, !boluses.contains(where: { $0.id == extra.id }) {
+            boluses.append(extra)
         }
+        SharedStore.setBolusDoses(
+            boluses.map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+        )
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -107,71 +162,115 @@ struct DialView: View {
     @ViewBuilder
     private var dialContent: some View {
         if step > 0 {
-            valueView(title: "CARBS",
-                      value: "\(carbs(for: step))",
-                      unit: "g",
-                      color: .orange,
-                      systemImage: "fork.knife")
+            switch carbValue(for: step) {
+            case .meal(let size):
+                valueView(title: "MEAL",
+                          value: size.shortLabel,
+                          unit: nil,
+                          color: .orange,
+                          systemImage: "fork.knife.circle",
+                          large: false)
+            case .grams(let g):
+                valueView(title: "CARBS",
+                          value: "\(g)",
+                          unit: "g",
+                          color: .orange,
+                          systemImage: "fork.knife",
+                          large: true)
+            }
         } else if step < 0 {
-            valueView(title: "INSULIN",
-                      value: insulinString(-step),
-                      unit: "U",
-                      color: .blue,
-                      systemImage: "syringe")
+            switch insulinValue(for: -step) {
+            case .bolus(let units):
+                valueView(title: "INSULIN",
+                          value: unitsString(units),
+                          unit: "U",
+                          color: .blue,
+                          systemImage: "syringe",
+                          large: true)
+            case .basal(let units):
+                valueView(title: "BASAL",
+                          value: unitsString(units),
+                          unit: "U",
+                          color: .indigo,
+                          systemImage: "syringe",
+                          large: true)
+            }
         } else {
             neutralView
         }
     }
 
     private var neutralView: some View {
-        VStack(spacing: 8) {
-            if let last = lastInsulin {
-                VStack(spacing: 2) {
-                    Text("Last insulin")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(last.timestamp, style: .timer)
-                        .font(.system(.title2, design: .rounded).monospacedDigit())
+        // Re-evaluates every 30 s so the IOB figures stay honest while the
+        // screen is up.
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            let doses = activeDoses
+            let iob = InsulinMath.insulinOnBoard(doses, at: timeline.date)
+            let active = InsulinMath.activity(doses, at: timeline.date)
+
+            VStack(spacing: 6) {
+                if let last = lastBolus {
+                    VStack(spacing: 1) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(InsulinMath.format(iob))
+                                .font(.system(.title2, design: .rounded).weight(.bold).monospacedDigit())
+                            Text("U on board")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         .foregroundStyle(.blue)
-                    Text("\(last.displayAmount) ago")
-                        .font(.caption2)
+
+                        Text("\(InsulinMath.format(active)) U active now")
+                            .font(.caption2)
+                            .foregroundStyle(.teal)
+
+                        Text(last.timestamp, style: .timer)
+                            .font(.system(.caption, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                } else {
+                    Text("No insulin logged yet")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else {
-                Text("No insulin logged yet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
-            Divider().padding(.vertical, 2)
+                Divider().padding(.vertical, 1)
 
-            VStack(spacing: 2) {
-                Label("Carbs", systemImage: "arrow.up")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                Label("Insulin", systemImage: "arrow.down")
-                    .font(.caption2)
-                    .foregroundStyle(.blue)
+                VStack(spacing: 2) {
+                    Label("Meal / carbs", systemImage: "arrow.up")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Label("Insulin / basal", systemImage: "arrow.down")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                }
             }
+            .multilineTextAlignment(.center)
         }
-        .multilineTextAlignment(.center)
     }
 
     private func valueView(title: String,
                            value: String,
-                           unit: String,
+                           unit: String?,
                            color: Color,
-                           systemImage: String) -> some View {
+                           systemImage: String,
+                           large: Bool) -> some View {
         VStack(spacing: 4) {
             Label(title, systemImage: systemImage)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(color)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(value)
-                    .font(.system(size: 56, weight: .bold, design: .rounded).monospacedDigit())
-                Text(unit)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: large ? 56 : 30, weight: .bold, design: .rounded).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                if let unit {
+                    Text(unit)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
             }
             Text("saving in a moment…")
                 .font(.caption2)
@@ -193,9 +292,8 @@ struct DialView: View {
 
     // MARK: - Logic
 
-    private func insulinString(_ steps: Int) -> String {
-        let units = Double(steps) * 0.5
-        return units == units.rounded() ? String(Int(units)) : String(format: "%.1f", units)
+    private func unitsString(_ units: Double) -> String {
+        units == units.rounded() ? String(Int(units)) : String(format: "%.1f", units)
     }
 
     /// Save immediately if there's a dialed-but-not-yet-saved value. Used when
@@ -223,8 +321,28 @@ struct DialView: View {
         guard s != 0 else { return }
 
         let now = Date.now
-        let kind: EntryKind = s > 0 ? .carbs : .insulin
-        let amount = s > 0 ? Double(carbs(for: s)) : Double(-s) * 0.5
+        let kind: EntryKind
+        let amount: Double
+
+        if s > 0 {
+            switch carbValue(for: s) {
+            case .meal(let size):
+                kind = .meal
+                amount = Double(size.rawValue)
+            case .grams(let g):
+                kind = .carbs
+                amount = Double(g)
+            }
+        } else {
+            switch insulinValue(for: -s) {
+            case .bolus(let units):
+                kind = .insulin
+                amount = units
+            case .basal(let units):
+                kind = .basal
+                amount = units
+            }
+        }
 
         let entry: LogEntry
         let wasCorrection: Bool
@@ -245,10 +363,7 @@ struct DialView: View {
         ConnectivityManager.shared.send(entry)
         WKInterfaceDevice.current().play(.success)
 
-        if entry.kind == .insulin {
-            SharedStore.setLastInsulin(units: entry.amount, date: entry.timestamp)
-        }
-        WidgetCenter.shared.reloadAllTimelines()
+        syncWidget(including: entry)
 
         justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount)
 

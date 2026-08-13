@@ -93,16 +93,45 @@ struct HistoryView: View {
     }()
 }
 
+/// Icon, colour and title for each kind, shared by the row and the editor.
+extension EntryKind {
+    var symbolName: String {
+        switch self {
+        case .carbs: return "fork.knife"
+        case .meal: return "fork.knife.circle"
+        case .insulin: return "syringe"
+        case .basal: return "syringe"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .carbs, .meal: return .orange
+        case .insulin: return .blue
+        case .basal: return .indigo
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .carbs: return "Carbs"
+        case .meal: return "Meal"
+        case .insulin: return "Insulin"
+        case .basal: return "Basal"
+        }
+    }
+}
+
 private struct EntryRow: View {
     let entry: LogEntry
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: entry.kind == .carbs ? "fork.knife" : "syringe")
-                .foregroundStyle(entry.kind == .carbs ? .orange : .blue)
+            Image(systemName: entry.kind.symbolName)
+                .foregroundStyle(entry.kind.tint)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.kind == .carbs ? "Carbs" : "Insulin")
+                Text(entry.kind.title)
                     .font(.body)
                     .foregroundStyle(.primary)
                 Text(entry.timestamp, style: .time)
@@ -112,7 +141,7 @@ private struct EntryRow: View {
             Spacer()
             Text(entry.displayAmount)
                 .font(.title3.weight(.semibold).monospacedDigit())
-                .foregroundStyle(entry.kind == .carbs ? .orange : .blue)
+                .foregroundStyle(entry.kind.tint)
             Image(systemName: "chevron.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -131,39 +160,57 @@ private struct EntryEditView: View {
 
     @State private var kind: EntryKind
     @State private var amount: Double
+    @State private var mealSize: MealSize
     @State private var timestamp: Date
 
     init(entry: LogEntry?) {
         self.entry = entry
         _kind = State(initialValue: entry?.kind ?? .carbs)
         _amount = State(initialValue: entry?.amount ?? 0)
+        _mealSize = State(initialValue: entry?.mealSize ?? .medium)
         _timestamp = State(initialValue: entry?.timestamp ?? .now)
     }
 
     private var isNew: Bool { entry == nil }
     private var unitLabel: String { kind == .carbs ? "g" : "U" }
-    private var stepSize: Double { kind == .carbs ? 1 : 0.5 }
+    private var stepSize: Double { kind == .insulin ? 0.5 : 1 }
+
+    /// A meal has no number attached — only a size.
+    private var isMeal: Bool { kind == .meal }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     Picker("Type", selection: $kind) {
-                        Label("Carbs", systemImage: "fork.knife").tag(EntryKind.carbs)
-                        Label("Insulin", systemImage: "syringe").tag(EntryKind.insulin)
+                        ForEach(EntryKind.allCases, id: \.self) { k in
+                            Label(k.title, systemImage: k.symbolName).tag(k)
+                        }
                     }
                     .pickerStyle(.segmented)
                 }
 
-                Section("Amount (\(kind == .carbs ? "grams" : "units"))") {
-                    HStack {
-                        TextField("Amount", value: $amount, format: .number)
-                            .keyboardType(.decimalPad)
-                        Text(unitLabel)
-                            .foregroundStyle(.secondary)
+                if isMeal {
+                    Section("Meal size") {
+                        Picker("Size", selection: $mealSize) {
+                            ForEach(MealSize.allCases) { size in
+                                Text(size.label).tag(size)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
                     }
-                    Stepper(value: $amount, in: 0...1000, step: stepSize) {
-                        Text("Adjust")
+                } else {
+                    Section("Amount (\(kind == .carbs ? "grams" : "units"))") {
+                        HStack {
+                            TextField("Amount", value: $amount, format: .number)
+                                .keyboardType(.decimalPad)
+                            Text(unitLabel)
+                                .foregroundStyle(.secondary)
+                        }
+                        Stepper(value: $amount, in: 0...1000, step: stepSize) {
+                            Text("Adjust")
+                        }
                     }
                 }
 
@@ -190,22 +237,24 @@ private struct EntryEditView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
-                        .disabled(amount <= 0)
+                        .disabled(!isMeal && amount <= 0)
                 }
             }
             .onChange(of: kind) { _, newKind in
-                // Snap insulin to a clean 0.5 grid when switching type.
-                if newKind == .insulin {
-                    amount = (amount * 2).rounded() / 2
-                } else {
-                    amount = amount.rounded()
+                // Snap bolus insulin to a clean 0.5 grid when switching type;
+                // carbs and basal are whole numbers.
+                switch newKind {
+                case .insulin: amount = (amount * 2).rounded() / 2
+                case .carbs, .basal: amount = amount.rounded()
+                case .meal: break
                 }
             }
         }
     }
 
     private func save() {
-        let value = max(0, amount)
+        // For meals the stored amount is the size ordinal, not a quantity.
+        let value = isMeal ? Double(mealSize.rawValue) : max(0, amount)
         if let entry {
             entry.kindRaw = kind.rawValue
             entry.amount = value

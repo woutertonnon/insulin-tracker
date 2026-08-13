@@ -24,3 +24,6 @@ vendor/bundle/
 # Secrets — never commit these
 *.p8
 AuthKey_*.p8
+
+# Reference PDFs — not source, and not ours to redistribute
+literature/
