@@ -206,7 +206,10 @@ struct DialView: View {
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
             let doses = activeDoses
             let iob = InsulinMath.insulinOnBoard(doses, at: timeline.date)
-            let active = InsulinMath.activity(doses, at: timeline.date)
+            // Exponential model, matching the complication's chart and the
+            // iPhone forecast — otherwise this screen would contradict the
+            // complication sitting on the same watch face.
+            let active = InsulinMath.exponentialActivity(doses, at: timeline.date)
 
             VStack(spacing: 6) {
                 if let last = lastBolus {

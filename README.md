@@ -166,12 +166,30 @@ with peak `tp` = 75 min (the OpenAPS rapid-acting default) and duration `td` = 4
 (held equal to `InsulinMath.duration` so the chart agrees with the IOB figures;
 OpenAPS's own default is 5 h — see `exponentialDuration`).
 
-> **The two curves are close but not identical.** Run at a 4 h duration the
-> exponential model reproduces Table 7-8's IOB to within 2–4 percentage points,
-> but it holds nearer the peak for longer — ≈0.98 vs 0.88 at 1.5 h. So the phone
-> chart and the watch complication can differ by around 0.1 U per unit dosed in
-> the 1.5–2 h window. To make them agree, point `activityFraction` at
-> `exponentialActivityFraction`.
+### Which curve is used where
+
+| Quantity | Curve | Shown on |
+|---|---|---|
+| **Insulin on board** | Table 7-8 | complication (top right), watch neutral screen |
+| **Activity / intensity** | exponential | complication chart, watch neutral screen, iPhone chart |
+
+Every *activity* readout uses the exponential model so the three surfaces can't
+contradict each other; IOB stays on the book's table. `InsulinMath.activity()`
+still implements the Table-7-8-derived activity curve and is kept for reference —
+swap it back in if you prefer the book's own numbers.
+
+> Run at a 4 h duration the exponential model reproduces Table 7-8's IOB to
+> within 2–4 percentage points, but it holds nearer the peak for longer —
+> ≈0.98 vs 0.88 at 1.5 h.
+
+### The complication
+
+`.accessoryRectangular`, laid out as time-since-last-bolus on the left, **IOB on
+the right**, and the 4-hour activity forecast underneath on **fixed axes** — 0–5 U
+vertically, 4 hours horizontally — so the curve's height and slope mean the same
+thing at every glance. A combined peak above 5 U flattens against the top of the
+plot; the IOB figure stays exact. Widen `unitsCeiling` in
+`WidgetExtension/LastDoseWidget.swift` if you routinely stack past 5 U.
 
 > Duration of insulin action varies per person (the book notes anywhere from
 > under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
