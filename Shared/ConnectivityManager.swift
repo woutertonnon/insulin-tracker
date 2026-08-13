@@ -50,6 +50,7 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     // MARK: - Sending
 
     /// Push an added or edited entry to the counterpart device.
+    @MainActor
     func send(_ entry: LogEntry) {
         transfer([
             Op.key: Op.upsert,
@@ -57,33 +58,47 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
             "timestamp": entry.timestamp.timeIntervalSince1970,
             "kind": entry.kind.rawValue,
             "amount": entry.amount,
+            Self.snapshotKey: currentBolusSnapshot(),
         ])
     }
 
     /// Push a deletion. Sent by id because the row is already gone locally.
+    @MainActor
     func sendDelete(id: UUID) {
         transfer([
             Op.key: Op.delete,
             "id": id.uuidString,
+            Self.snapshotKey: currentBolusSnapshot(),
         ])
     }
 
-    /// Publish the complete bolus list the complication needs. Safe to call
-    /// after any change — it replaces whatever was there.
+    /// Every bolus, flattened. Rides along with each message so a single
+    /// delivery carries complete state — the receiver never has to have seen
+    /// any earlier message for the complication to end up correct.
     @MainActor
-    func pushBolusSnapshot() {
-        guard let container = modelContainer else { return }
+    private func currentBolusSnapshot() -> [Double] {
+        guard let container = modelContainer else { return [] }
         let all = (try? container.mainContext.fetch(FetchDescriptor<LogEntry>())) ?? []
-        let flat = all
+        return all
             .filter { $0.kind == .insulin }
             .sorted { $0.timestamp < $1.timestamp }
             .flatMap { [$0.timestamp.timeIntervalSince1970, $0.amount] }
+    }
 
+    /// Publish the complete bolus list as application context too.
+    ///
+    /// This is a *secondary* channel. It is delivered whenever the counterpart
+    /// next runs, which makes it a good backstop, but it does not reliably wake
+    /// a sleeping watch app — so it cannot be the only way the complication
+    /// hears about a change. The snapshot rides along with the transfers above
+    /// for that.
+    @MainActor
+    func pushBolusSnapshot() {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated else { return }
         // Throws only if the session is not activated, which is guarded above.
-        try? session.updateApplicationContext([Self.snapshotKey: flat])
+        try? session.updateApplicationContext([Self.snapshotKey: currentBolusSnapshot()])
     }
 
     private func transfer(_ payload: [String: Any]) {
@@ -184,6 +199,11 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
 
     @MainActor
     private func apply(_ userInfo: [String: Any]) {
+        // Do this first and unconditionally: the complication's correctness must
+        // not depend on the SwiftData merge below succeeding, or even on this
+        // message being one we understand.
+        applySnapshot(userInfo)
+
         guard
             let container = modelContainer,
             let idString = userInfo["id"] as? String,
