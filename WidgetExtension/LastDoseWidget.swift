@@ -75,16 +75,23 @@ struct InsulinOnBoardView: View {
                 // curve never reaches: every dose is under 4 h old, so activity
                 // has always decayed to zero by the right edge of the window.
                 // Right-aligned so they hug the emptiest part of the plot.
+                // The IOB line sets the width of the corner block; the timer
+                // stretches to fill it, so the two lines share both edges
+                // instead of the timer sitting indented under a wider label.
                 VStack(alignment: .trailing, spacing: -1) {
                     Text("\(InsulinMath.format(iob)) U IOB")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.blue)
                     // Time since the last bolus — ticks on its own.
                     Text(last.date, style: .timer)
-                        .font(.system(size: 9, design: .rounded).monospacedDigit())
+                        .font(.system(size: 10, design: .rounded).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
+                // Sizes the stack to the IOB line rather than the whole
+                // complication, which is what gives the timer a width to fill.
+                .fixedSize(horizontal: true, vertical: false)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             } else {
