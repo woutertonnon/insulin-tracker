@@ -179,31 +179,25 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
 
     // MARK: - Receiving
 
+    /// A snapshot arriving from the counterpart is treated as a *nudge*, not as
+    /// data.
+    ///
+    /// Writing it straight through would be actively wrong: this watch's store
+    /// is the union of both devices, so the phone's list can be missing a dose
+    /// just logged here that has not reached it yet. Overwriting with it would
+    /// delete that dose from the complication. Rebuild from the local store
+    /// instead, which already has everything.
     @MainActor
     private func applySnapshot(_ context: [String: Any]) {
         #if os(watchOS)
-        guard let flat = context[Self.snapshotKey] as? [Double] else { return }
-        var doses: [InsulinMath.Dose] = []
-        var i = 0
-        while i + 1 < flat.count {
-            doses.append(InsulinMath.Dose(units: flat[i + 1],
-                                          date: Date(timeIntervalSince1970: flat[i])))
-            i += 2
-        }
-        // Straight to the App Group the complication reads — this path does not
-        // touch SwiftData at all, so it cannot be held up by a merge.
-        SharedStore.setBolusDoses(doses)
-        WidgetCenter.shared.reloadAllTimelines()
+        guard context[Self.snapshotKey] != nil else { return }
+        guard let container = modelContainer else { return }
+        refreshComplication(using: container.mainContext)
         #endif
     }
 
     @MainActor
     private func apply(_ userInfo: [String: Any]) {
-        // Do this first and unconditionally: the complication's correctness must
-        // not depend on the SwiftData merge below succeeding, or even on this
-        // message being one we understand.
-        applySnapshot(userInfo)
-
         guard
             let container = modelContainer,
             let idString = userInfo["id"] as? String,

@@ -15,6 +15,10 @@ struct InsulinProvider: TimelineProvider {
     /// small steps rather than relying on refreshes.
     private let sampleInterval: TimeInterval = 5 * 60
 
+    /// How long the complication may show data read before it was rebuilt.
+    /// This is the backstop for a reload request that watchOS declines.
+    private let maxStaleness: TimeInterval = 15 * 60
+
     func placeholder(in context: Context) -> InsulinEntry {
         InsulinEntry(date: .now,
                      doses: [InsulinMath.Dose(units: 3.5, date: .now.addingTimeInterval(-2400))])
@@ -28,11 +32,15 @@ struct InsulinProvider: TimelineProvider {
         let doses = SharedStore.bolusDoses()
         let now = Date.now
 
-        // Cover the decay of everything still on board. The two-hour floor is
-        // just to keep idle reloads rare — the elapsed readout ticks on its own
-        // and IOB does not move once nothing is active.
+        // `doses` is read once here and baked into every entry below, so the
+        // whole timeline is a snapshot of the App Group at this instant. An
+        // explicit reload is what normally refreshes it — but watchOS throttles
+        // those, so the horizon doubles as the guaranteed staleness bound and
+        // must stay short. It is deliberately NOT stretched to keep idle
+        // reloads rare: that trade buys nothing and costs correctness.
         let active = InsulinMath.lastActiveUntil(doses, at: now) ?? now
-        let end = max(active, now.addingTimeInterval(2 * 3600))
+        let horizon = now.addingTimeInterval(maxStaleness)
+        let end = min(max(active, now), horizon)
 
         var entries: [InsulinEntry] = []
         var t = now
@@ -44,7 +52,9 @@ struct InsulinProvider: TimelineProvider {
             entries = [InsulinEntry(date: now, doses: doses)]
         }
 
-        completion(Timeline(entries: entries, policy: .after(end)))
+        // Always ask again by the horizon, even with nothing on board — a dose
+        // logged on the phone must not wait on the next explicit reload.
+        completion(Timeline(entries: entries, policy: .after(horizon)))
     }
 }
 
