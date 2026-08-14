@@ -60,6 +60,15 @@ struct DialView: View {
 
     private var step: Int { Int(index.rounded()) }
 
+    /// "1.0 (39)" — `CFBundleVersion` is the CI run number, so this is exactly
+    /// the TestFlight build number.
+    private static let versionString: String = {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }()
+
     // MARK: - Dial value decoding
 
     /// What a positive crown step means: a meal size, or exact grams.
@@ -251,6 +260,13 @@ struct DialView: View {
                         .font(.caption2)
                         .foregroundStyle(.blue)
                 }
+
+                // Which binary is actually on the wrist. The complication is
+                // embedded in this app, so it is always this same build —
+                // which makes this the version marker for both.
+                Text(Self.versionString)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
             }
             .multilineTextAlignment(.center)
         }
