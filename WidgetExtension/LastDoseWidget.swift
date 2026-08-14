@@ -74,6 +74,10 @@ struct InsulinOnBoardView: View {
     private static let unitsCeiling: Double = 5
     private static let span: TimeInterval = 4 * 3600
 
+    /// Where the horizontal rules go — one per unit, typed so the axis knows
+    /// what it is plotting.
+    private static let unitGridValues: [Double] = [0, 1, 2, 3, 4, 5]
+
     /// IOB to one decimal: "0.9 U IOB".
     ///
     /// No padding glyphs. Figure-space padding was an attempt to keep this line
@@ -201,8 +205,11 @@ struct InsulinOnBoardView: View {
                     .foregroundStyle(Color.gray.opacity(0.35))
             }
         }
+        // Explicit values rather than .stride: the closure ignores its argument,
+        // so nothing here tells Swift the axis is numeric and the stride
+        // overload has no type to resolve against.
         .chartYAxis {
-            AxisMarks(values: .stride(by: 1)) { _ in
+            AxisMarks(values: Self.unitGridValues) { _ in
                 AxisGridLine()
                     .foregroundStyle(Color.gray.opacity(0.28))
             }
