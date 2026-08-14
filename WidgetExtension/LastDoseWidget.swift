@@ -130,37 +130,7 @@ struct InsulinOnBoardView: View {
                 // …and the readouts sit in the top-right corner, which the
                 // curve never reaches: every dose is under 4 h old, so activity
                 // has always decayed to zero by the right edge of the window.
-                //
-                // Deliberately plain. Every layout trick that was here to make
-                // the two lines exactly equal width — measured point sizes,
-                // fixedSize, padding glyphs — turned out to be a way for the
-                // text to end up clipped or unrendered.
-                VStack(alignment: .trailing, spacing: 0) {
-                    // Each line is pushed right by its own spacer rather than
-                    // relying on the stack's alignment. Text(style: .timer) is
-                    // system-drawn and reserves a width of its own choosing, so
-                    // stack alignment alone leaves it sitting left of the line
-                    // above it.
-                    HStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        Text(iobText)
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.blue)
-                    }
-                    HStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        timerText(since: last.date)
-                            .font(.system(size: Self.timerFontSize).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .padding(.trailing, 1)
-                // Keeps the readouts in the accented group on tinted faces,
-                // rather than being recoloured into the background.
-                .widgetAccentable()
+                readouts(since: last.date)
             } else {
                 Label("No dose logged yet", systemImage: "syringe")
                     .font(.caption2)
@@ -170,6 +140,44 @@ struct InsulinOnBoardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .containerBackground(for: .widget) { Color.clear }
+    }
+
+    /// IOB over the elapsed time, in the top-right corner.
+    ///
+    /// Kept out of `body` on purpose. Nesting this inline pushed the body deep
+    /// enough that the type-checker gave up on it — an explicit return type is
+    /// what stops each added stack compounding the inference cost.
+    ///
+    /// Deliberately plain, too. Every layout trick that was once here to make
+    /// the two lines exactly equal width — measured point sizes, fixedSize,
+    /// padding glyphs — turned out to be a way for the text to end up clipped
+    /// or unrendered.
+    private func readouts(since date: Date) -> some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            // Each line is pushed right by its own spacer rather than relying
+            // on the stack's alignment. Text(style: .timer) is system-drawn and
+            // reserves a width of its own choosing, so stack alignment alone
+            // leaves it sitting left of the line above it.
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Text(iobText)
+                    .font(.caption2.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.blue)
+            }
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                timerText(since: date)
+                    .font(.system(size: Self.timerFontSize).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
+        .padding(.trailing, 1)
+        // Keeps the readouts in the accented group on tinted faces, rather than
+        // being recoloured into the background.
+        .widgetAccentable()
     }
 
     private var chart: some View {
