@@ -41,10 +41,11 @@ struct InsulinProvider: TimelineProvider {
         // `doses` is read once here and baked into every entry below, so the
         // whole timeline is a snapshot of the App Group at this instant. An
         // explicit reload is what normally refreshes it — but watchOS throttles
-        // those, so the horizon doubles as the guaranteed staleness bound.
-        //
+        // those, so the horizon doubles as the guaranteed staleness bound and
+        // must stay short. It is deliberately NOT stretched to keep idle
+        // reloads rare: that trade buys nothing and costs correctness.
         // Generate out to whichever is later: the end of the current activity
-        // curve, or that horizon. Entries inside a timeline are free, so
+        // curve, or the refresh horizon. Entries inside a timeline are free, so
         // covering the full decay means IOB keeps moving correctly even if
         // every reload request in between is declined.
         let active = InsulinMath.lastActiveUntil(doses, at: now) ?? now
@@ -73,10 +74,6 @@ struct InsulinOnBoardView: View {
     /// Fixed scales so the shape means the same thing at every glance.
     private static let unitsCeiling: Double = 5
     private static let span: TimeInterval = 4 * 3600
-
-    /// Where the horizontal rules go — one per unit, typed so the axis knows
-    /// what it is plotting.
-    private static let unitGridValues: [Double] = [0, 1, 2, 3, 4, 5]
 
     /// IOB to one decimal: "0.9 U IOB".
     ///
@@ -122,15 +119,50 @@ struct InsulinOnBoardView: View {
         InsulinMath.forecast(entry.doses, from: entry.date, span: Self.span, step: 10 * 60)
     }
 
+    /// TEMPORARY DIAGNOSTIC — remove once the staleness is understood.
+    ///
+    /// Shows the clock time of the timeline entry currently on screen. If this
+    /// tracks the real time, WidgetKit is running the provider and the fault is
+    /// in the data it reads; if it sits in the past, the provider is not being
+    /// run at all and the fault is the reload, not the App Group.
+    private static let showsGenerationTime = true
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            if Self.showsGenerationTime {
+                Text(entry.date, style: .time)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomTrailing)
+            }
+
             if let last = lastBolus {
                 // The chart takes the whole complication…
                 chart
                 // …and the readouts sit in the top-right corner, which the
                 // curve never reaches: every dose is under 4 h old, so activity
                 // has always decayed to zero by the right edge of the window.
-                readouts(since: last.date)
+                // Right-aligned so they hug the emptiest part of the plot.
+                // Deliberately plain. Every layout trick that was here to make
+                // the two lines exactly equal width — measured point sizes,
+                // fixedSize, padding glyphs — is a way for the text to end up
+                // clipped or unrendered, and text that is not on screen is
+                // worse than text that is a few points narrow.
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(iobText)
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.blue)
+                    timerText(since: last.date)
+                        .font(.system(size: Self.timerFontSize).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.trailing, 1)
+                // Keeps the readouts in the accented group on tinted faces,
+                // rather than being recoloured into the background.
+                .widgetAccentable()
             } else {
                 Label("No dose logged yet", systemImage: "syringe")
                     .font(.caption2)
@@ -140,44 +172,6 @@ struct InsulinOnBoardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .containerBackground(for: .widget) { Color.clear }
-    }
-
-    /// IOB over the elapsed time, in the top-right corner.
-    ///
-    /// Kept out of `body` on purpose. Nesting this inline pushed the body deep
-    /// enough that the type-checker gave up on it — an explicit return type is
-    /// what stops each added stack compounding the inference cost.
-    ///
-    /// Deliberately plain, too. Every layout trick that was once here to make
-    /// the two lines exactly equal width — measured point sizes, fixedSize,
-    /// padding glyphs — turned out to be a way for the text to end up clipped
-    /// or unrendered.
-    private func readouts(since date: Date) -> some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            // Each line is pushed right by its own spacer rather than relying
-            // on the stack's alignment. Text(style: .timer) is system-drawn and
-            // reserves a width of its own choosing, so stack alignment alone
-            // leaves it sitting left of the line above it.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                Text(iobText)
-                    .font(.caption2.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.blue)
-            }
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                timerText(since: date)
-                    .font(.system(size: Self.timerFontSize).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .lineLimit(1)
-        .minimumScaleFactor(0.5)
-        .padding(.trailing, 1)
-        // Keeps the readouts in the accented group on tinted faces, rather than
-        // being recoloured into the background.
-        .widgetAccentable()
     }
 
     private var chart: some View {
@@ -204,24 +198,15 @@ struct InsulinOnBoardView: View {
         // curve's height and slope are comparable between glances.
         .chartYScale(domain: 0...Self.unitsCeiling)
         .chartXScale(domain: entry.date...entry.date.addingTimeInterval(Self.span))
-        // Faint rules give the curve a scale in both directions: every hour
-        // across, every unit up. Gridlines only — there is no room for labels
-        // at this size.
+        // Faint hour marks give the curve a time scale. Gridlines only — there
+        // is no room for labels at this size.
         .chartXAxis {
             AxisMarks(values: .stride(by: .hour)) { _ in
                 AxisGridLine()
                     .foregroundStyle(Color.gray.opacity(0.35))
             }
         }
-        // Explicit values rather than .stride: the closure ignores its argument,
-        // so nothing here tells Swift the axis is numeric and the stride
-        // overload has no type to resolve against.
-        .chartYAxis {
-            AxisMarks(values: Self.unitGridValues) { _ in
-                AxisGridLine()
-                    .foregroundStyle(Color.gray.opacity(0.28))
-            }
-        }
+        .chartYAxis(.hidden)
         .chartLegend(.hidden)
         .chartPlotStyle { plot in
             plot.background(Color.clear)
