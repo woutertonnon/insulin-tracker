@@ -73,10 +73,6 @@ struct InsulinOnBoardView: View {
     private static let timerReference = "0:00:00"
     private static let iobReference = "00.0 U IOB"
 
-    /// Range end for the ticking timer. Only its start matters — the system
-    /// counts up from there — but the range has to outlast any plausible gap
-    /// between doses.
-    private static let timerSpan: TimeInterval = 99 * 3600
 
     /// Figure space: same advance as a digit, so padding with it keeps the
     /// field width constant without drawing anything.
@@ -89,17 +85,18 @@ struct InsulinOnBoardView: View {
         return "\(pad)\(value) U IOB"
     }
 
-    /// Time since the last bolus, ticking every second and still fixed-width.
+    /// Time since the last bolus, ticking every second.
     ///
-    /// `Text(style: .timer)` was the problem: it drops the hours field under an
-    /// hour, so the string changes length as it runs. This initialiser's
-    /// `showsHours` keeps `H:MM:SS` throughout, which is both live and a
-    /// constant seven characters.
+    /// `Text(timerInterval:showsHours:)` looked ideal — a constant `H:MM:SS`
+    /// that the system still animates — but on a real watch face it renders
+    /// without seconds, so it is not usable here whatever the signature
+    /// suggests. `style: .timer` does tick seconds, at the cost of dropping the
+    /// hours field under an hour: `12:34` rather than `0:12:34`. The width
+    /// calibration below therefore lands exactly only once an hour has passed;
+    /// before that the timer sits narrower than the line above it. Seconds were
+    /// the explicit priority, so that is the trade.
     private func timerText(since date: Date) -> Text {
-        Text(timerInterval: date...date.addingTimeInterval(Self.timerSpan),
-             pauseTime: nil,
-             countsDown: false,
-             showsHours: true)
+        Text(date, style: .timer)
     }
 
     /// Point size at which `timerReference` in monospaced digits is exactly as
