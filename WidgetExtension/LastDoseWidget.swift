@@ -15,9 +15,15 @@ struct InsulinProvider: TimelineProvider {
     /// small steps rather than relying on refreshes.
     private let sampleInterval: TimeInterval = 5 * 60
 
-    /// How long the complication may show data read before it was rebuilt.
-    /// This is the backstop for a reload request that watchOS declines.
-    private let maxStaleness: TimeInterval = 15 * 60
+    /// How long the complication may show data read before it was rebuilt —
+    /// the backstop for a reload request that watchOS declines.
+    ///
+    /// Not shorter than this on purpose. watchOS budgets complication refreshes
+    /// per day, and asking too often gets requests dropped rather than served,
+    /// which would make staleness worse rather than better. Thirty minutes is
+    /// ~48 a day. Entries *within* the timeline are free, so IOB still moves
+    /// every five minutes between refreshes.
+    private let maxStaleness: TimeInterval = 30 * 60
 
     func placeholder(in context: Context) -> InsulinEntry {
         InsulinEntry(date: .now,
@@ -38,9 +44,13 @@ struct InsulinProvider: TimelineProvider {
         // those, so the horizon doubles as the guaranteed staleness bound and
         // must stay short. It is deliberately NOT stretched to keep idle
         // reloads rare: that trade buys nothing and costs correctness.
+        // Generate out to whichever is later: the end of the current activity
+        // curve, or the refresh horizon. Entries inside a timeline are free, so
+        // covering the full decay means IOB keeps moving correctly even if
+        // every reload request in between is declined.
         let active = InsulinMath.lastActiveUntil(doses, at: now) ?? now
         let horizon = now.addingTimeInterval(maxStaleness)
-        let end = min(max(active, now), horizon)
+        let end = max(active, horizon)
 
         var entries: [InsulinEntry] = []
         var t = now
@@ -141,8 +151,24 @@ struct InsulinOnBoardView: View {
         InsulinMath.forecast(entry.doses, from: entry.date, span: Self.span, step: 10 * 60)
     }
 
+    /// TEMPORARY DIAGNOSTIC — remove once the staleness is understood.
+    ///
+    /// Shows the clock time of the timeline entry currently on screen. If this
+    /// tracks the real time, WidgetKit is running the provider and the fault is
+    /// in the data it reads; if it sits in the past, the provider is not being
+    /// run at all and the fault is the reload, not the App Group.
+    private static let showsGenerationTime = true
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            if Self.showsGenerationTime {
+                Text(entry.date, style: .time)
+                    .font(.system(size: 8))
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomTrailing)
+            }
+
             if let last = lastBolus {
                 // The chart takes the whole complication…
                 chart
