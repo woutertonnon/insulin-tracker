@@ -39,12 +39,17 @@ struct DialView: View {
     /// Crown up, steps 1…5: meal sizes, for when the carb count isn't known.
     private static let mealSizes = MealSize.allCases
 
-    /// Crown up, steps 6+: exact carb amounts (g), finer at the low end where
-    /// precision matters: 1…10 by 1, then 15/20/25/30, then by 10 up to 200.
+    /// Crown up, steps 6+: exact carb amounts (g), coarsening as the number
+    /// grows, since 5 g matters at 20 g and not at 300 g: 1…10 by 1, then
+    /// 15/20/25/30, then by 10 up to 200, then by 25 up to 500.
+    ///
+    /// The step widens past 200 rather than continuing by 10 to keep the crown
+    /// travel usable — by 10 all the way would be 47 extra positions.
     private static let carbLadder: [Int] =
         Array(1...10)
         + Array(stride(from: 15, through: 30, by: 5))
         + Array(stride(from: 40, through: 200, by: 10))
+        + Array(stride(from: 225, through: 500, by: 25))
 
     private static let carbMaxSteps = mealSizes.count + carbLadder.count
 

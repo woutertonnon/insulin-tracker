@@ -222,9 +222,10 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store
   disallows it). "Do nothing" simply saves nothing; dropping your wrist backgrounds
   the app. Reopening always starts fresh at the neutral screen.
-- **Ranges:** carbs use a fine-at-the-low-end ladder (1–10 by 1, then 15/20/25/30,
-  then by 10 up to 200 g); bolus insulin is 0.5–20 U; basal is 1–60 U. Adjust
-  `carbLadder` / `bolusMaxSteps` / `basalMaxUnits` in `WatchApp/DialView.swift`.
+- **Ranges:** carbs use a ladder that coarsens as the number grows (1–10 by 1,
+  then 15/20/25/30, then by 10 up to 200 g, then by 25 up to 500 g); bolus insulin
+  is 0.5–20 U; basal is 1–60 U. Adjust `carbLadder` / `bolusMaxSteps` /
+  `basalMaxUnits` in `WatchApp/DialView.swift`.
 - **Replace the icon:** drop your own 1024×1024 PNG over
   `iOSApp/Assets.xcassets/AppIcon.appiconset/icon-1024.png` (and the watch one), or
   re-run `python3 scripts/make_icon.py`.
