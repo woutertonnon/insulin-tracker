@@ -75,24 +75,13 @@ struct InsulinOnBoardView: View {
     private static let unitsCeiling: Double = 5
     private static let span: TimeInterval = 4 * 3600
 
-    /// Reference strings for the width calibration. Both lines are rendered at
-    /// a **fixed character count** — the IOB figure in a padded 4-wide field,
-    /// the elapsed time as zero-padded `HH:MM` — so these are not merely
-    /// representative, they are exactly as wide as what gets drawn, always.
-    /// That is what lets one calibration hold for every value.
-    private static let timerReference = "0:00:00"
-    private static let iobReference = "00.0 U IOB"
-
-
-    /// Figure space: same advance as a digit, so padding with it keeps the
-    /// field width constant without drawing anything.
-    private static let figureSpace = "\u{2007}"
-
-    /// IOB to one decimal in a fixed 4-character field: "␣0.9", "12.5".
+    /// IOB to one decimal: "0.9 U IOB".
+    ///
+    /// No padding glyphs. Figure-space padding was an attempt to keep this line
+    /// a constant width, but padding with a character the font may not carry is
+    /// a poor trade against the text rendering at all.
     private var iobText: String {
-        let value = String(format: "%.1f", min(max(iob, 0), 99.9))
-        let pad = String(repeating: Self.figureSpace, count: max(0, 4 - value.count))
-        return "\(pad)\(value) U IOB"
+        "\(String(format: "%.1f", min(max(iob, 0), 99.9))) U IOB"
     }
 
     /// Time since the last bolus, ticking every second.
@@ -101,40 +90,19 @@ struct InsulinOnBoardView: View {
     /// that the system still animates — but on a real watch face it renders
     /// without seconds, so it is not usable here whatever the signature
     /// suggests. `style: .timer` does tick seconds, at the cost of dropping the
-    /// hours field under an hour: `12:34` rather than `0:12:34`. The width
-    /// calibration below therefore lands exactly only once an hour has passed;
-    /// before that the timer sits narrower than the line above it. Seconds were
-    /// the explicit priority, so that is the trade.
+    /// hours field under an hour: `12:34` rather than `0:12:34`.
     private func timerText(since date: Date) -> Text {
         Text(date, style: .timer)
     }
 
-    /// Point size at which `timerReference` in monospaced digits is exactly as
-    /// wide as `iobReference` in the IOB line's font.
+    /// A little smaller than the IOB line above it, tracking Dynamic Type.
     ///
-    /// Measured from the live font metrics rather than hardcoded, so it stays
-    /// correct across watch sizes and Dynamic Type settings. Monospaced-digit
-    /// advance scales linearly with point size, so one probe measurement gives
-    /// the ratio. Falls back to the probe size if metrics come back empty.
-    /// Computed per render — two text measurements is nothing, and it keeps
-    /// the value from freezing at whatever Dynamic Type was set on launch.
+    /// This used to be derived by measuring both strings so their widths would
+    /// match exactly. That calibration is gone: it depended on text metrics at
+    /// render time, and a bad measurement scales the type badly enough to push
+    /// it out of a complication this small.
     private static var timerFontSize: CGFloat {
-        let probeSize: CGFloat = 10
-
-        // Must mirror the IOB line exactly, monospaced digits included, or the
-        // measurement describes a string that is never actually drawn.
-        let caption2 = UIFont.preferredFont(forTextStyle: .caption2)
-        let iobFont = UIFont.monospacedDigitSystemFont(ofSize: caption2.pointSize,
-                                                       weight: .semibold)
-        let targetWidth = (iobReference as NSString)
-            .size(withAttributes: [.font: iobFont]).width
-
-        let probeFont = UIFont.monospacedDigitSystemFont(ofSize: probeSize, weight: .regular)
-        let probeWidth = (timerReference as NSString)
-            .size(withAttributes: [.font: probeFont]).width
-
-        guard probeWidth > 0, targetWidth > 0 else { return probeSize }
-        return probeSize * targetWidth / probeWidth
+        UIFont.preferredFont(forTextStyle: .caption2).pointSize * 0.85
     }
 
     private var iob: Double {
@@ -176,26 +144,25 @@ struct InsulinOnBoardView: View {
                 // curve never reaches: every dose is under 4 h old, so activity
                 // has always decayed to zero by the right edge of the window.
                 // Right-aligned so they hug the emptiest part of the plot.
-                VStack(alignment: .trailing, spacing: -1) {
-                    // Monospaced digits throughout: with proportional figures a
-                    // 1 is narrower than an 8, which alone would break the
-                    // width match between these two lines.
+                // Deliberately plain. Every layout trick that was here to make
+                // the two lines exactly equal width — measured point sizes,
+                // fixedSize, padding glyphs — is a way for the text to end up
+                // clipped or unrendered, and text that is not on screen is
+                // worse than text that is a few points narrow.
+                VStack(alignment: .trailing, spacing: 0) {
                     Text(iobText)
                         .font(.caption2.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.blue)
-                        .lineLimit(1)
-                    // Sized once so this spans the line above exactly. No
-                    // minimumScaleFactor — both strings are fixed-width, so
-                    // there is nothing left to scale away from.
                     timerText(since: last.date)
                         .font(.system(size: Self.timerFontSize).monospacedDigit())
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
                 }
-                // Sizes the stack to its widest line rather than to the whole
-                // complication, so the timer right-aligns under the IOB label.
-                .fixedSize(horizontal: true, vertical: false)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.trailing, 1)
+                // Keeps the readouts in the accented group on tinted faces,
+                // rather than being recoloured into the background.
+                .widgetAccentable()
             } else {
                 Label("No dose logged yet", systemImage: "syringe")
                     .font(.caption2)
@@ -231,7 +198,14 @@ struct InsulinOnBoardView: View {
         // curve's height and slope are comparable between glances.
         .chartYScale(domain: 0...Self.unitsCeiling)
         .chartXScale(domain: entry.date...entry.date.addingTimeInterval(Self.span))
-        .chartXAxis(.hidden)
+        // Faint hour marks give the curve a time scale. Gridlines only — there
+        // is no room for labels at this size.
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .hour)) { _ in
+                AxisGridLine()
+                    .foregroundStyle(Color.gray.opacity(0.35))
+            }
+        }
         .chartYAxis(.hidden)
         .chartLegend(.hidden)
         .chartPlotStyle { plot in

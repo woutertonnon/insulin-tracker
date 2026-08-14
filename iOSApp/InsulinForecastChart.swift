@@ -109,9 +109,11 @@ struct InsulinForecastChart: View {
             .chartYVisibleDomain(length: Self.visibleUnits)
             .chartScrollPosition(initialX: now)
             .chartScrollPosition(initialY: 0)
+            // A faint vertical rule on every hour, so the curve can be read
+            // against time without counting tick labels.
             .chartXAxis {
                 AxisMarks(values: .stride(by: .hour)) { _ in
-                    AxisGridLine().foregroundStyle(Self.grid)
+                    AxisGridLine().foregroundStyle(Self.hourLine)
                     AxisTick().foregroundStyle(Self.grid)
                     AxisValueLabel(format: .dateTime.hour().minute())
                         .foregroundStyle(.secondary)
@@ -177,6 +179,14 @@ struct InsulinForecastChart: View {
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 0x2c / 255, green: 0x2c / 255, blue: 0x2a / 255, alpha: 1)
             : UIColor(red: 0xe1 / 255, green: 0xe0 / 255, blue: 0xd9 / 255, alpha: 1)
+    })
+
+    /// Hour rules — a touch stronger than the value gridlines so the time scale
+    /// reads first, but still recessive against the curve.
+    private static let hourLine = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(white: 1, alpha: 0.22)
+            : UIColor(white: 0, alpha: 0.16)
     })
 
     private var areaGradient: LinearGradient {
