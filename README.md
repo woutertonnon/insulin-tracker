@@ -122,6 +122,13 @@ Push to `main` (or **Actions → "Deploy to TestFlight" → Run workflow**). The
 lands in TestFlight in ~10–20 min after Apple finishes processing. Install via the
 **TestFlight** app on your iPhone; the watch app installs from the iPhone's Watch app.
 
+> **Apple caps uploads per app per day.** Hit it and every build fails at the last
+> step — archiving and signing succeed, then `upload_to_testflight` returns
+> `Validation failed (409) Upload limit reached`, for a full day. Since each push
+> to `main` deploys, a run of small commits burns through it fast. Put
+> **`[skip deploy]`** in a commit message to land work without spending an upload,
+> and leave it off the last commit of a batch.
+
 ### 7. Assign the Action Button (on the watch)
 
 On the Watch Ultra: **Settings → Action Button → Action → Open App → Insulin**.

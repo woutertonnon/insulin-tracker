@@ -16,6 +16,11 @@ permissions:
 
 jobs:
   build:
+    # Apple caps TestFlight uploads per app per day, and once that cap is hit
+    # every build fails at the very last step — after archiving and signing
+    # succeed — for a full day. Put "[skip deploy]" in a commit message to land
+    # work without spending an upload, then push the last one without it.
+    if: ${{ !contains(github.event.head_commit.message, '[skip deploy]') }}
     runs-on: macos-15
     env:
       # ---- must match Config.xcconfig ----
