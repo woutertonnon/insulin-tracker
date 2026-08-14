@@ -51,6 +51,8 @@ struct InsulinProvider: TimelineProvider {
         let horizon = now.addingTimeInterval(maxStaleness)
         let end = max(active, horizon)
 
+        // The 100 cap is a backstop, not a real bound: the longest timeline
+        // this can produce is the 4-hour decay at 5-minute steps, 48 entries.
         var entries: [InsulinEntry] = []
         var t = now
         while t <= end && entries.count < 100 {
