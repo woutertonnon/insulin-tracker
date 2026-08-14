@@ -17,13 +17,22 @@ struct HistoryView: View {
     @State private var now: Date = .now
     private let ticker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
-    /// Rapid-acting boluses still working at `date`. Basal is excluded — its
-    /// action profile isn't described by this curve.
-    private func activeDoses(at date: Date) -> [InsulinMath.Dose] {
-        let cutoff = date.addingTimeInterval(-InsulinMath.duration)
+    /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
+    /// its action profile isn't described by this curve.
+    ///
+    /// The window is twice the duration of insulin action because the chart can
+    /// be scrolled back four hours: a dose given six hours ago contributes
+    /// nothing now, but was at its peak on the part of the curve you scroll to.
+    private func chartDoses(at date: Date) -> [InsulinMath.Dose] {
+        let cutoff = date.addingTimeInterval(-2 * InsulinMath.duration)
         return entries
             .filter { $0.kind == .insulin && $0.timestamp > cutoff && $0.timestamp <= date }
             .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+    }
+
+    /// Whether anything is still working — decides if the chart is shown at all.
+    private func hasActiveInsulin(at date: Date) -> Bool {
+        InsulinMath.insulinOnBoard(chartDoses(at: date), at: date) > 0.005
     }
 
     var body: some View {
@@ -41,10 +50,9 @@ struct HistoryView: View {
                         // over the next four hours. Only shown while something
                         // is still active; `now` ticks so it disappears on its
                         // own once the last dose runs out.
-                        let doses = activeDoses(at: now)
-                        if !doses.isEmpty {
-                            Section("Insulin activity — next 4 hours") {
-                                InsulinForecastChart(doses: doses, now: now)
+                        if hasActiveInsulin(at: now) {
+                            Section("Insulin activity") {
+                                InsulinForecastChart(doses: chartDoses(at: now), now: now)
                             }
                         }
 

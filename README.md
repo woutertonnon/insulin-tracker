@@ -151,9 +151,20 @@ different action profile that this curve does not describe.
 
 ### The iPhone forecast chart
 
-The History screen carries a live **"Insulin activity — next 4 hours"** chart that
-projects how many units will be working at each moment from now on, with stacked
-doses summed into one curve. It disappears on its own once the last dose runs out.
+The History screen carries a live **"Insulin activity"** chart of how many units
+are working at each moment, with stacked doses summed into one curve. It
+disappears on its own once the last dose runs out.
+
+It **scrolls in both directions**. The visible window is a fixed 4 hours wide and
+5 units tall — the same scales as the complication — so the curve's shape means
+the same thing wherever it is scrolled to. The plot extends four hours either
+side of now, so the elapsed part of the curve can be scrolled back into, and a
+dashed rule marks the boundary. Zero is the floor of the vertical domain, so it
+cannot be scrolled below. Vertical scrolling only engages when a peak actually
+exceeds 5 U.
+
+The headline figure above the chart is **insulin on board**; the curve itself is
+activity.
 
 That chart uses the **biexponential model** used by OpenAPS / Loop / AndroidAPS
 rather than the table above:

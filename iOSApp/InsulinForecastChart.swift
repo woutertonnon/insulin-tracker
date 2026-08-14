@@ -2,26 +2,46 @@ import SwiftUI
 import Charts
 import UIKit
 
-/// "Insulin activity — next 4 hours": how many units of rapid-acting insulin
-/// will be working at each moment from now on, projected with the biexponential
-/// model used by OpenAPS / Loop.
+/// Insulin activity over time: how many units of rapid-acting insulin are
+/// working at each moment, projected with the biexponential model used by
+/// OpenAPS / Loop.
+///
+/// Scrollable in both directions. The visible window is a fixed 4 hours wide
+/// and a fixed 5 units tall, so the curve's shape means the same thing wherever
+/// it is scrolled to; the plotted range extends four hours either side of now,
+/// so the past of the curve can be scrolled back into. Vertically it can never
+/// go below zero — that is the floor of the domain, not a clamp.
 ///
 /// Stacked boluses are summed, so overlapping doses show up as one combined
 /// curve. Basal insulin is not part of this — it has a different action profile.
 struct InsulinForecastChart: View {
     let doses: [InsulinMath.Dose]
-    /// Recomputed by the caller's TimelineView so the curve slides with time.
+    /// Recomputed by the caller so the curve slides with time.
     let now: Date
 
+    /// Fixed visible window, matching the complication's scales.
+    private static let visibleHours: TimeInterval = 4 * 3600
+    private static let visibleUnits: Double = 5
+
+    /// How far either side of `now` the curve is drawn.
+    private static let pastSpan: TimeInterval = 4 * 3600
+
+    private var start: Date { now.addingTimeInterval(-Self.pastSpan) }
+    private var end: Date { now.addingTimeInterval(InsulinMath.duration) }
+
     private var points: [InsulinMath.ForecastPoint] {
-        InsulinMath.forecast(doses, from: now)
+        InsulinMath.forecast(doses,
+                             from: start,
+                             span: Self.pastSpan + InsulinMath.duration,
+                             step: 5 * 60)
     }
 
-    private var nowUnits: Double {
-        InsulinMath.exponentialActivity(doses, at: now)
+    /// Insulin still working right now — the headline figure.
+    private var iobNow: Double {
+        InsulinMath.insulinOnBoard(doses, at: now)
     }
 
-    /// Highest point of the forecast — labelled directly on the chart.
+    /// Highest point of the curve, labelled directly on the chart.
     private var peak: InsulinMath.ForecastPoint? {
         points.max { $0.units < $1.units }
     }
@@ -31,8 +51,11 @@ struct InsulinForecastChart: View {
         InsulinMath.lastActiveUntil(doses, at: now)
     }
 
-    private var yMax: Double {
-        max((peak?.units ?? 0) * 1.25, 0.5)
+    /// Zero floor is deliberate — scrolling can never go below it. The top only
+    /// exceeds the visible 5 U when the curve actually needs the room, so
+    /// vertical scrolling appears exactly when there is something to scroll to.
+    private var yDomainMax: Double {
+        max(Self.visibleUnits, ((peak?.units ?? 0) * 1.2).rounded(.up))
     }
 
     var body: some View {
@@ -59,7 +82,12 @@ struct InsulinForecastChart: View {
                     .interpolationMethod(.monotone)
                 }
 
-                // Peak marker, with a surface ring so it reads over the line.
+                // Separates what has already happened from what is projected —
+                // easy to lose track of once the chart is scrolled.
+                RuleMark(x: .value("Now", now))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .foregroundStyle(Self.grid)
+
                 if let peak, peak.units > 0.01 {
                     PointMark(
                         x: .value("Time", peak.date),
@@ -67,15 +95,20 @@ struct InsulinForecastChart: View {
                     )
                     .symbolSize(70)
                     .foregroundStyle(Self.series)
-                    .annotation(position: annotationPosition(for: peak),
-                                spacing: 6) {
+                    .annotation(position: .top, spacing: 6) {
                         Text("peak \(InsulinMath.format(peak.units)) U")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            .chartYScale(domain: 0...yMax)
+            .chartXScale(domain: start...end)
+            .chartYScale(domain: 0...yDomainMax)
+            .chartScrollableAxes([.horizontal, .vertical])
+            .chartXVisibleDomain(length: Self.visibleHours)
+            .chartYVisibleDomain(length: Self.visibleUnits)
+            .chartScrollPosition(initialX: now)
+            .chartScrollPosition(initialY: 0)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .hour)) { _ in
                     AxisGridLine().foregroundStyle(Self.grid)
@@ -85,7 +118,7 @@ struct InsulinForecastChart: View {
                 }
             }
             .chartYAxis {
-                AxisMarks(position: .leading) { value in
+                AxisMarks(position: .leading, values: .stride(by: 1)) { value in
                     AxisGridLine().foregroundStyle(Self.grid)
                     AxisValueLabel {
                         if let u = value.as(Double.self) {
@@ -95,7 +128,7 @@ struct InsulinForecastChart: View {
                     }
                 }
             }
-            .frame(height: 170)
+            .frame(height: 190)
 
             footer
         }
@@ -107,14 +140,14 @@ struct InsulinForecastChart: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(InsulinMath.format(nowUnits))
+                Text(InsulinMath.format(iobNow))
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(Self.series)
-                Text("U active now")
+                Text("U on board")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Text("Rapid-acting insulin still working, all doses combined.")
+            Text("Insulin still working, all doses combined. The curve below is how much is active at each moment.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -123,15 +156,10 @@ struct InsulinForecastChart: View {
     @ViewBuilder
     private var footer: some View {
         if let endsAt {
-            Text("Back to zero at \(endsAt.formatted(date: .omitted, time: .shortened)) · exponential model (OpenAPS / Loop)")
+            Text("Back to zero at \(endsAt.formatted(date: .omitted, time: .shortened)) · exponential model (OpenAPS / Loop) · scroll to pan")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
-    }
-
-    /// Keep the peak label inside the plot when the peak sits near the top.
-    private func annotationPosition(for peak: InsulinMath.ForecastPoint) -> AnnotationPosition {
-        peak.units > yMax * 0.85 ? .bottom : .top
     }
 
     // MARK: - Palette
