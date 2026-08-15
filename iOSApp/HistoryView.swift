@@ -31,8 +31,8 @@ struct HistoryView: View {
     }
 
     /// Whether anything is still working — decides if the chart is shown at all.
-    private func hasActiveInsulin(at date: Date) -> Bool {
-        InsulinMath.insulinOnBoard(chartDoses(at: date), at: date) > 0.005
+    private func hasActiveInsulin(_ doses: [InsulinMath.Dose], at date: Date) -> Bool {
+        InsulinMath.insulinOnBoard(doses, at: date) > 0.005
     }
 
     var body: some View {
@@ -50,9 +50,12 @@ struct HistoryView: View {
                         // over the next four hours. Only shown while something
                         // is still active; `now` ticks so it disappears on its
                         // own once the last dose runs out.
-                        if hasActiveInsulin(at: now) {
+                        // Built once and reused: the visibility check and the
+                        // chart need the same list, and this runs on every tick.
+                        let doses = chartDoses(at: now)
+                        if hasActiveInsulin(doses, at: now) {
                             Section("Insulin activity") {
-                                InsulinForecastChart(doses: chartDoses(at: now), now: now)
+                                InsulinForecastChart(doses: doses, now: now)
                             }
                         }
 
