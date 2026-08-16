@@ -176,6 +176,12 @@ struct InsulinOnBoardView: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
+        // Alignment *inside* each text's own frame. Container alignment and
+        // spacers only position the frame; when minimumScaleFactor shrinks a
+        // line, or when Text(style: .timer) reserves width for a longer form
+        // than it is currently showing, the glyphs sit leading within that
+        // frame and no amount of outer alignment moves them.
+        .multilineTextAlignment(.trailing)
         .padding(.trailing, 1)
         // Keeps the readouts in the accented group on tinted faces, rather than
         // being recoloured into the background.
