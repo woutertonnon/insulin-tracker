@@ -115,9 +115,9 @@ enum CarbRatio {
     /// overnight correction that quietly failed a filter is visible rather than
     /// simply absent.
     enum CorrectionRejection: String, Hashable, Sendable {
-        case foodLogged = "food logged within 4 h"
-        case insulinStacked = "another bolus within 4 h"
-        case noGlucose = "no glucose at the dose or 4 h later"
+        case foodLogged = "food logged in the 4 h before"
+        case windowTooShort = "another dose or meal within 2 h"
+        case noGlucose = "no glucose at the dose or at the window end"
         case glucoseRose = "glucose rose — something was absorbing"
         case fallTooSmall = "glucose barely moved"
         case doseTooSmall = "dose under 0.5 U"
@@ -175,9 +175,20 @@ enum CarbRatio {
     /// absorbing — whether or not it was logged.
     private static let unloggedFoodRise = 0.10
 
+    /// Rises before this are ignored. Insulin takes 15–20 minutes to bite, and
+    /// people correct when they are high *and climbing*, so glucose going up
+    /// straight after a correction is the normal case rather than evidence of
+    /// food. Only a rise once the dose should be working means something is
+    /// absorbing.
+    private static let insulinBiteDelay: TimeInterval = 90 * 60
+
+    /// Shortest usable window. Less than this and too little of the dose has
+    /// acted for the extrapolation below to mean anything.
+    private static let minimumCorrectionWindow: TimeInterval = 2 * 3600
+
     /// Minimum fall, as a fraction of the starting value, for a correction to
     /// carry signal rather than sensor noise.
-    private static let minimumFall = 0.08
+    private static let minimumFall = 0.05
 
     /// Doses below this make the division too sensitive to be worth it.
     private static let minimumCorrectionUnits = 0.5
@@ -333,31 +344,38 @@ enum CarbRatio {
 
             if recent.contains(where: {
                 ($0.kind == .carbsInGrams || $0.kind == .mealWithoutAmount)
-                    && $0.date > from && $0.date < to
+                    && $0.date > from && $0.date <= bolus.date
             }) {
                 reject(.foodLogged)
                 continue
             }
 
-            if recent.contains(where: {
-                $0.kind == .bolus && $0 != bolus && $0.date > from && $0.date < to
-            }) {
-                reject(.insulinStacked)
+            // Anything after the dose truncates the window rather than voiding
+            // it. A morning correction followed by breakfast still has a clean
+            // couple of hours in it, and throwing that away discards most real
+            // corrections.
+            let nextEvent = recent
+                .filter { $0 != bolus && $0.kind != .basal && $0.date > bolus.date }
+                .map(\.date)
+                .min()
+            let horizon = min(to, nextEvent ?? to)
+            let span = horizon.timeIntervalSince(bolus.date)
+            guard span >= minimumCorrectionWindow else {
+                reject(.windowTooShort)
                 continue
             }
 
             guard let g0 = nearest(glucose, to: bolus.date),
-                  let g1 = nearest(glucose, to: to) else {
+                  let g1 = nearest(glucose, to: horizon) else {
                 reject(.noGlucose)
                 continue
             }
 
-            // A rise above the starting value means something was absorbing.
-            // Expressed as a fraction so it holds in mmol/L and mg/dL alike —
-            // both are ratio scales, so a percentage is unit-free where any
-            // absolute margin would not be.
+            // Only look for a food hump once the dose should be biting; before
+            // that a rise is just insulin lag on a climbing glucose.
             let peak = glucose
-                .filter { $0.date >= bolus.date && $0.date <= to }
+                .filter { $0.date >= bolus.date.addingTimeInterval(insulinBiteDelay)
+                          && $0.date <= horizon }
                 .map(\.value)
                 .max() ?? g0.value
             guard peak <= g0.value * (1 + unloggedFoodRise) else {
@@ -370,14 +388,23 @@ enum CarbRatio {
                 continue
             }
 
-            // A fall too small to separate from sensor noise divides badly.
             let drop = g0.value - g1.value
             guard drop >= g0.value * minimumFall else {
                 reject(.fallTooSmall)
                 continue
             }
 
-            samples.append(drop / bolus.amount)
+            // The window may end before the dose has finished, so scale by how
+            // much of it had acted by then — the same action curve the rest of
+            // the app uses. Without this, a truncated window would understate
+            // sensitivity in proportion to how early it was cut.
+            let actedFraction = 1 - InsulinMath.remainingFraction(hours: span / 3600)
+            guard actedFraction >= 0.4 else {
+                reject(.windowTooShort)
+                continue
+            }
+
+            samples.append(drop / (bolus.amount * actedFraction))
         }
         return (samples, rejections)
     }

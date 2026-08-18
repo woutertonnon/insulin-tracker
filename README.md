@@ -242,6 +242,12 @@ That needs ISF — how far one unit moves you — so it is **measured, not assum
 from *correction boluses*: insulin taken with no food within four hours, where
 the whole glucose fall is the dose's doing.
 
+A correction does not need a clean four hours, either — a morning correction
+followed by breakfast still has a clean couple of hours in it. The window is
+truncated at whatever comes next, and the drop is scaled by how much of the dose
+had acted by then, using the same action curve as the rest of the app. Requiring
+four undisturbed hours would discard most real corrections.
+
 Identifying those corrections can't rely on the log, though. Unlogged meals are
 the premise of this whole feature, and an unlogged meal plus its bolus looks
 exactly like a correction — it would drag ISF down and distort every ratio built
@@ -251,6 +257,10 @@ it started, and a dose acting alone never does. Any window containing a rise of
 more than 10% above the starting value is discarded, logged or not. The
 threshold is a fraction rather than an absolute so it holds in mmol/L and mg/dL
 alike.
+
+That check only starts **90 minutes after the dose**. Insulin takes 15–20 minutes
+to bite and people correct when they are high *and climbing*, so glucose rising
+straight after a correction is the normal case, not evidence of food.
 
 A correction also has to move at least 8% and be at least 0.5 U, or the division
 is dominated by sensor noise.
