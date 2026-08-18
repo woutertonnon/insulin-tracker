@@ -104,7 +104,7 @@ struct HistoryView: View {
                             }
                         }
 
-                        Section("Carb ratio · last 7 days") {
+                        Section("Carb ratio · last 28 days") {
                             CarbRatioCard(estimate: carbRatio,
                                           glucoseUnit: health.glucoseUnitLabel)
                         }

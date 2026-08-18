@@ -111,6 +111,18 @@ enum CarbRatio {
         var id: String { "\(daypart.rawValue)-\(withExercise)" }
     }
 
+    /// Why a bolus was not usable for measuring sensitivity. Surfaced so an
+    /// overnight correction that quietly failed a filter is visible rather than
+    /// simply absent.
+    enum CorrectionRejection: String, Hashable, Sendable {
+        case foodLogged = "food logged within 4 h"
+        case insulinStacked = "another bolus within 4 h"
+        case noGlucose = "no glucose at the dose or 4 h later"
+        case glucoseRose = "glucose rose — something was absorbing"
+        case fallTooSmall = "glucose barely moved"
+        case doseTooSmall = "dose under 0.5 U"
+    }
+
     enum Rejection: String, Hashable, Sendable {
         case noBolusBefore = "no bolus in the hour before"
         case insulinStacked = "other insulin within 4 h"
@@ -125,6 +137,8 @@ enum CarbRatio {
         /// clean corrections exist, which disables the whole method.
         let isf: Double?
         let isfSampleCount: Int
+        /// Boluses considered for sensitivity but discarded, and why.
+        let correctionRejections: [CorrectionRejection: Int]
         let cells: [Cell]
         /// All usable meals together — shown when a cell is too thin on its own.
         let pooled: Double?
@@ -134,7 +148,10 @@ enum CarbRatio {
 
     // MARK: - Parameters
 
-    static let window: TimeInterval = 7 * 24 * 3600
+    /// Four weeks. Six cells split three ways by daypart and two by exercise
+    /// leave a seven-day window with almost nothing in the exercise column;
+    /// four weeks fills it while still tracking a real change in sensitivity.
+    static let window: TimeInterval = 28 * 24 * 3600
 
     /// A bolus this far before the meal counts as covering it. The small tail
     /// after exists because the watch logs one value per turn of the crown, so
@@ -177,7 +194,12 @@ enum CarbRatio {
         let since = now.addingTimeInterval(-window)
         let recent = events.filter { $0.date > since && $0.date <= now }
 
-        let isfSamples = correctionSensitivities(recent: recent, glucose: glucose)
+        // Sorted once: `nearest` binary-searches, and four weeks of CGM is
+        // thousands of points scanned for every dose considered.
+        let series = glucose.sorted { $0.date < $1.date }
+
+        let (isfSamples, correctionRejections) = correctionSensitivities(recent: recent,
+                                                                         glucose: series)
         let isf = isfSamples.count >= minimumCorrections ? median(isfSamples) : nil
 
         var episodes: [Episode] = []
@@ -263,6 +285,7 @@ enum CarbRatio {
 
         return Estimate(isf: isf,
                         isfSampleCount: isfSamples.count,
+                        correctionRejections: correctionRejections,
                         cells: cells,
                         pooled: allRatios.count >= minimumEpisodes ? median(allRatios) : nil,
                         episodes: episodes.sorted { $0.date > $1.date },
@@ -286,26 +309,48 @@ enum CarbRatio {
     /// anyone remembering anything: carbohydrate absorbing pushes glucose
     /// *above* where it started, and a dose acting alone never does. Any window
     /// containing such a rise is discarded, logged meal or not.
-    private static func correctionSensitivities(recent: [Event],
-                                                glucose: [GlucosePoint]) -> [Double] {
+    private static func correctionSensitivities(
+        recent: [Event],
+        glucose: [GlucosePoint]
+    ) -> (samples: [Double], rejections: [CorrectionRejection: Int]) {
         var samples: [Double] = []
+        var rejections: [CorrectionRejection: Int] = [:]
+        func reject(_ r: CorrectionRejection) { rejections[r, default: 0] += 1 }
+
         for bolus in recent where bolus.kind == .bolus && bolus.amount > 0 {
             let from = bolus.date.addingTimeInterval(-InsulinMath.duration)
             let to = bolus.date.addingTimeInterval(outcomeDelay)
 
-            let foodNearby = recent.contains {
+            // A bolus paired with a meal is a meal episode, not a correction,
+            // and is silently skipped rather than reported as a failure — it
+            // was never a candidate.
+            let mealBolus = recent.contains {
+                guard $0.kind == .carbsInGrams || $0.kind == .mealWithoutAmount else { return false }
+                let offset = $0.date.timeIntervalSince(bolus.date)
+                return offset >= -bolusTrail && offset <= bolusLead
+            }
+            if mealBolus { continue }
+
+            if recent.contains(where: {
                 ($0.kind == .carbsInGrams || $0.kind == .mealWithoutAmount)
                     && $0.date > from && $0.date < to
+            }) {
+                reject(.foodLogged)
+                continue
             }
-            if foodNearby { continue }
 
-            let otherInsulin = recent.contains {
+            if recent.contains(where: {
                 $0.kind == .bolus && $0 != bolus && $0.date > from && $0.date < to
+            }) {
+                reject(.insulinStacked)
+                continue
             }
-            if otherInsulin { continue }
 
             guard let g0 = nearest(glucose, to: bolus.date),
-                  let g1 = nearest(glucose, to: to) else { continue }
+                  let g1 = nearest(glucose, to: to) else {
+                reject(.noGlucose)
+                continue
+            }
 
             // A rise above the starting value means something was absorbing.
             // Expressed as a fraction so it holds in mmol/L and mg/dL alike —
@@ -315,23 +360,55 @@ enum CarbRatio {
                 .filter { $0.date >= bolus.date && $0.date <= to }
                 .map(\.value)
                 .max() ?? g0.value
-            guard peak <= g0.value * (1 + unloggedFoodRise) else { continue }
+            guard peak <= g0.value * (1 + unloggedFoodRise) else {
+                reject(.glucoseRose)
+                continue
+            }
+
+            guard bolus.amount >= minimumCorrectionUnits else {
+                reject(.doseTooSmall)
+                continue
+            }
 
             // A fall too small to separate from sensor noise divides badly.
             let drop = g0.value - g1.value
-            guard drop >= g0.value * minimumFall else { continue }
-            guard bolus.amount >= minimumCorrectionUnits else { continue }
+            guard drop >= g0.value * minimumFall else {
+                reject(.fallTooSmall)
+                continue
+            }
+
             samples.append(drop / bolus.amount)
         }
-        return samples
+        return (samples, rejections)
     }
 
     // MARK: - Helpers
 
+    /// Closest reading to `date`, or nil if none is close enough.
+    ///
+    /// Binary search, not a scan: four weeks of CGM is thousands of points and
+    /// this runs for every dose and meal considered. Requires `points` sorted
+    /// ascending, which `estimate` guarantees.
     private static func nearest(_ points: [GlucosePoint], to date: Date) -> GlucosePoint? {
-        points
-            .filter { abs($0.date.timeIntervalSince(date)) <= glucoseTolerance }
-            .min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+        guard !points.isEmpty else { return nil }
+
+        var low = 0
+        var high = points.count
+        while low < high {
+            let mid = (low + high) / 2
+            if points[mid].date < date { low = mid + 1 } else { high = mid }
+        }
+
+        // The insertion point straddles the answer: check either side of it.
+        var best: GlucosePoint?
+        for index in [low - 1, low] where index >= 0 && index < points.count {
+            let candidate = points[index]
+            let gap = abs(candidate.date.timeIntervalSince(date))
+            guard gap <= glucoseTolerance else { continue }
+            if let current = best, abs(current.date.timeIntervalSince(date)) <= gap { continue }
+            best = candidate
+        }
+        return best
     }
 
     private static func median(_ values: [Double]) -> Double? {

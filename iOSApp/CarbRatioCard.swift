@@ -28,6 +28,7 @@ struct CarbRatioCard: View {
                         .foregroundStyle(.secondary)
                 }
                 sensitivity
+                correctionEvidence
             }
             evidence
             method
@@ -41,9 +42,10 @@ struct CarbRatioCard: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Needs a correction dose first")
                 .font(.headline)
-            Text("Turning a glucose miss into missing units needs to know how far one unit moves you. That is measured from boluses taken with no food within four hours — \(estimate.isfSampleCount) found so far, \(CarbRatio.minimumCorrections) needed.")
+            Text("Turning a glucose miss into missing units needs to know how far one unit moves you. That is measured from boluses taken with no food within four hours — \(estimate.isfSampleCount) usable so far, \(CarbRatio.minimumCorrections) needed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            correctionEvidence
         }
     }
 
@@ -106,6 +108,26 @@ struct CarbRatioCard: View {
             Text("Measured sensitivity: 1 U moves you \(String(format: "%.1f", isf)) \(glucoseUnit), from \(estimate.isfSampleCount) correction\(estimate.isfSampleCount == 1 ? "" : "s").")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// Corrections that were looked at and dropped. Without this a dose that
+    /// quietly failed a filter is indistinguishable from one that never
+    /// happened.
+    @ViewBuilder
+    private var correctionEvidence: some View {
+        let dropped = estimate.correctionRejections.filter { $0.value > 0 }
+        if !dropped.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Corrections not used")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(dropped.sorted { $0.value > $1.value }, id: \.key) { reason, count in
+                    Text("\(count) · \(reason.rawValue)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 

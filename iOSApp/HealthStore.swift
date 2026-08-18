@@ -134,10 +134,10 @@ final class HealthStore: ObservableObject {
         let descriptor = HKSampleQueryDescriptor(
             predicates: [predicate],
             sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
-            // A week of CGM at five-minute intervals is ~2,000 samples; leave
-            // headroom rather than silently truncating the oldest days, which
-            // are exactly the ones the carb ratio needs.
-            limit: 4000
+            // Four weeks of CGM at five-minute intervals is ~8,000 samples;
+            // leave headroom rather than silently truncating the oldest days,
+            // which are exactly the ones the carb ratio needs.
+            limit: 20000
         )
         guard let samples = try? await descriptor.result(for: store) else { return nil }
         let unit = glucoseUnit

@@ -226,7 +226,7 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 
 ## Carb ratio
 
-A running 7-day insulin-to-carb ratio, measured from **what actually happened
+A running 28-day insulin-to-carb ratio, measured from **what actually happened
 after each meal** — no rules of thumb.
 
 For every meal logged in **grams** with a bolus in the hour before it, glucose is
@@ -273,8 +273,8 @@ before (or moments after — the watch logs dose and meal seconds apart), no oth
 insulin or food within 4 h, and glucose either side. Meals logged by size carry
 no gram figure and are never assigned a guessed one.
 
-> Six cells over seven days is thin, especially the exercise column. Expect the
-> counts to matter as much as the ratios at first.
+> The window is 28 days. Six cells — three dayparts × exercise or not — leave a
+> seven-day window with almost nothing in the exercise column.
 
 > The unlogged-food filter protects the ISF measurement, not the meals
 > themselves. An unlogged snack *during* a meal's four-hour window still
