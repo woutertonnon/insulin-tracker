@@ -16,6 +16,10 @@ import UIKit
 /// curve. Basal insulin is not part of this — it has a different action profile.
 struct InsulinForecastChart: View {
     let doses: [InsulinMath.Dose]
+    /// Workouts from Health, drawn as bands behind the curve. They do not
+    /// affect the numbers — exercise does change insulin sensitivity, but by an
+    /// amount this app has no way to know, so it is shown as context only.
+    let workouts: [HealthStore.Workout]
     /// Recomputed by the caller so the curve slides with time.
     let now: Date
 
@@ -63,6 +67,16 @@ struct InsulinForecastChart: View {
             header
 
             Chart {
+                // Behind everything: the stretches where exercise overlapped
+                // insulin still working, which is where stacking matters most.
+                ForEach(visibleWorkouts) { w in
+                    RectangleMark(
+                        xStart: .value("Start", max(w.start, start)),
+                        xEnd: .value("End", min(w.end, end))
+                    )
+                    .foregroundStyle(Self.exercise.opacity(0.18))
+                }
+
                 ForEach(points) { p in
                     AreaMark(
                         x: .value("Time", p.date),
@@ -157,10 +171,32 @@ struct InsulinForecastChart: View {
 
     @ViewBuilder
     private var footer: some View {
-        if let endsAt {
-            Text("Back to zero at \(endsAt.formatted(date: .omitted, time: .shortened)) · exponential model (OpenAPS / Loop) · scroll to pan")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 3) {
+            // Two things are encoded, so both are named rather than left to
+            // colour alone.
+            if !visibleWorkouts.isEmpty {
+                HStack(spacing: 10) {
+                    Label {
+                        Text("insulin activity").font(.caption2).foregroundStyle(.secondary)
+                    } icon: {
+                        RoundedRectangle(cornerRadius: 1)
+                            .fill(Self.series)
+                            .frame(width: 10, height: 2)
+                    }
+                    Label {
+                        Text("exercise").font(.caption2).foregroundStyle(.secondary)
+                    } icon: {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Self.exercise.opacity(0.35))
+                            .frame(width: 10, height: 8)
+                    }
+                }
+            }
+            if let endsAt {
+                Text("Back to zero at \(endsAt.formatted(date: .omitted, time: .shortened)) · exponential model (OpenAPS / Loop) · scroll to pan")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -179,6 +215,20 @@ struct InsulinForecastChart: View {
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 0x2c / 255, green: 0x2c / 255, blue: 0x2a / 255, alpha: 1)
             : UIColor(red: 0xe1 / 255, green: 0xe0 / 255, blue: 0xd9 / 255, alpha: 1)
+    })
+
+    /// Workouts overlapping the plotted range, clipped to it. A zero-width band
+    /// would not draw, so anything ending exactly at the left edge is dropped.
+    private var visibleWorkouts: [HealthStore.Workout] {
+        workouts.filter { $0.end > start && $0.start < end }
+    }
+
+    /// Categorical slot 3 (aqua) — distinct from the blue insulin curve, and
+    /// not the orange used for carbs elsewhere.
+    private static let exercise = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0x19 / 255, green: 0x9e / 255, blue: 0x70 / 255, alpha: 1)
+            : UIColor(red: 0x1b / 255, green: 0xaf / 255, blue: 0x7a / 255, alpha: 1)
     })
 
     /// Hour rules — a touch stronger than the value gridlines so the time scale

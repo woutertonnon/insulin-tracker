@@ -17,6 +17,13 @@ struct HistoryView: View {
     @State private var now: Date = .now
     private let ticker = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
+    /// Workouts and glucose, read from Health. Kept out of SwiftData — Health
+    /// stays the source of truth for both.
+    @StateObject private var health = HealthStore()
+
+    /// How far back Health is queried. Matches the chart's scrollable range.
+    private var healthWindow: Date { now.addingTimeInterval(-2 * InsulinMath.duration) }
+
     /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
     /// its action profile isn't described by this curve.
     ///
@@ -38,7 +45,9 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if entries.isEmpty {
+                // Health data alone is enough to have something worth showing,
+                // so this cannot key off logged entries only.
+                if entries.isEmpty && health.workouts.isEmpty && health.glucose.isEmpty {
                     ContentUnavailableView(
                         "No entries yet",
                         systemImage: "list.bullet.rectangle",
@@ -55,25 +64,40 @@ struct HistoryView: View {
                         let doses = chartDoses(at: now)
                         if hasActiveInsulin(doses, at: now) {
                             Section("Insulin activity") {
-                                InsulinForecastChart(doses: doses, now: now)
+                                InsulinForecastChart(doses: doses,
+                                                     workouts: health.workouts,
+                                                     now: now)
+                            }
+                        }
+
+                        if let latest = health.latestGlucose {
+                            Section("Glucose") {
+                                GlucoseCard(health: health, latest: latest, now: now)
                             }
                         }
 
                         ForEach(groupedByDay, id: \.day) { group in
                             Section(header: Text(group.title)) {
-                                ForEach(group.entries) { entry in
-                                    Button {
-                                        editingEntry = entry
-                                    } label: {
-                                        EntryRow(entry: entry)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .swipeActions(edge: .trailing) {
-                                        Button(role: .destructive) {
-                                            delete(entry)
+                                ForEach(group.items) { item in
+                                    switch item {
+                                    case .entry(let entry):
+                                        Button {
+                                            editingEntry = entry
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            EntryRow(entry: entry)
                                         }
+                                        .buttonStyle(.plain)
+                                        .swipeActions(edge: .trailing) {
+                                            Button(role: .destructive) {
+                                                delete(entry)
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                        }
+                                    case .workout(let workout):
+                                        // No tap, no swipe: this row belongs to
+                                        // Health and is edited there.
+                                        WorkoutRow(workout: workout)
                                     }
                                 }
                             }
@@ -97,7 +121,14 @@ struct HistoryView: View {
             .sheet(isPresented: $addingNew) {
                 EntryEditView(entry: nil)
             }
-            .onReceive(ticker) { now = $0 }
+            .onReceive(ticker) { instant in
+                now = instant
+                Task { await health.refresh(since: healthWindow) }
+            }
+            .task {
+                await health.requestAccess()
+                await health.refresh(since: healthWindow)
+            }
         }
     }
 
@@ -110,19 +141,42 @@ struct HistoryView: View {
         ConnectivityManager.shared.pushBolusSnapshot()
     }
 
+    /// A row in the history: something logged here, or a workout read from
+    /// Health. Workouts are shown but never stored — Health owns them, and
+    /// copying them in would mean reconciling edits made in the Fitness app.
+    private enum HistoryItem: Identifiable {
+        case entry(LogEntry)
+        case workout(HealthStore.Workout)
+
+        var id: String {
+            switch self {
+            case .entry(let e): return "e-\(e.id.uuidString)"
+            case .workout(let w): return "w-\(w.id.uuidString)"
+            }
+        }
+
+        var date: Date {
+            switch self {
+            case .entry(let e): return e.timestamp
+            case .workout(let w): return w.start
+            }
+        }
+    }
+
     private struct DayGroup {
         let day: Date
         let title: String
-        let entries: [LogEntry]
+        let items: [HistoryItem]
     }
 
     private var groupedByDay: [DayGroup] {
         let cal = Calendar.current
-        let grouped = Dictionary(grouping: entries) { cal.startOfDay(for: $0.timestamp) }
+        let items = entries.map(HistoryItem.entry) + health.workouts.map(HistoryItem.workout)
+        let grouped = Dictionary(grouping: items) { cal.startOfDay(for: $0.date) }
         return grouped.keys.sorted(by: >).map { day in
             DayGroup(day: day,
                      title: Self.dayFormatter.string(from: day),
-                     entries: grouped[day]!.sorted { $0.timestamp > $1.timestamp })
+                     items: grouped[day]!.sorted { $0.date > $1.date })
         }
     }
 
@@ -190,6 +244,33 @@ private struct EntryRow: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+    }
+}
+
+/// A workout read from Health. Styled like an entry row but visibly not one —
+/// no chevron, since there is nothing here to open.
+private struct WorkoutRow: View {
+    let workout: HealthStore.Workout
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "figure.run")
+                .foregroundStyle(.teal)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(workout.name)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Text(workout.start, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(workout.durationText)
+                .font(.title3.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.teal)
+        }
+        .padding(.vertical, 2)
     }
 }
 

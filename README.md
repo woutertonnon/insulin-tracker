@@ -224,6 +224,42 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 > under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
 > it, edit the table in `Shared/InsulinMath.swift`.
 
+## Apple Health
+
+The iPhone app reads two things from Health, and writes nothing back:
+
+- **Workouts** — shown in the history list, and drawn as shaded bands behind the
+  insulin activity chart so you can see where exercise overlapped insulin that
+  was still working.
+- **Glucose** — written to Health by the Dexcom G7 app, shown as its own card
+  with the latest reading and a trend line.
+
+Neither is copied into SwiftData. Health stays the source of truth, which avoids
+reconciling against samples the Fitness or Dexcom apps may revise later.
+
+> **Exercise does not change the IOB or activity figures.** It genuinely changes
+> insulin sensitivity, but by an amount this app has no way to know, so it is
+> shown as context rather than folded into the maths.
+
+> **Glucose here can lag the sensor.** Dexcom uploads to Health in batches, not
+> continuously. The card shows the age of the reading, and marks it when it is
+> more than 15 minutes old.
+
+Glucose is displayed in whatever unit Health is set to — `preferredUnits(for:)`
+decides, so mmol/L and mg/dL both work with no setting of our own.
+
+### One-time setup
+
+HealthKit needs the capability enabled on the App ID before it will sign:
+
+1. [Developer portal → Identifiers](https://developer.apple.com/account/resources/identifiers/list)
+   → your iOS bundle id → tick **HealthKit** → Save.
+2. **Actions → "Set up signing (run once)" → Run workflow**, so `match`
+   regenerates profiles that carry the new entitlement.
+
+Skipping either makes every build fail at the signing step — `match` regenerates
+profiles but cannot enable capabilities.
+
 ## Notes & limitations
 
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store
