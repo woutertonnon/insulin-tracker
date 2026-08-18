@@ -260,6 +260,12 @@ HealthKit needs the capability enabled on the App ID before it will sign:
 Skipping either makes every build fail at the signing step — `match` regenerates
 profiles but cannot enable capabilities.
 
+Both HealthKit purpose strings are required in `iOSApp/Info.plist`, including
+`NSHealthUpdateUsageDescription`, even though this app never writes to Health.
+App Store validation keys off the entitlement, not off which APIs are called, and
+rejects the upload with `Missing purpose string in Info.plist` if the write one is
+absent. That failure appears only at upload, after archiving and signing succeed.
+
 ## Notes & limitations
 
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store

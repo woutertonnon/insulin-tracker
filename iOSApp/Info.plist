@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Reads your workouts and glucose so they can be shown alongside your insulin doses. Nothing is written back to Health, and nothing leaves your devices.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>This app does not write anything to Health. Apple requires this description whenever an app carries the HealthKit entitlement, even for read-only access.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
