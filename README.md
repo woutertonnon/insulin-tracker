@@ -224,6 +224,43 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 > under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
 > it, edit the table in `Shared/InsulinMath.swift`.
 
+## Carb ratio
+
+A running 7-day estimate of the insulin-to-carb ratio, built around one
+asymmetry: **insulin logging is reliable, meal logging is not.**
+
+**The headline figure uses no meal data at all.** It is the book's *500 Rule* —
+`I:C = 500 ÷ total daily insulin`, basal included — which rests on the
+assumption that a person consumes and produces about 500 g of carbohydrate a
+day. Nothing you do or don't log about food can move it.
+
+**The second figure is corroboration from meals that can be shown to have gone
+well.** *Think Like a Pancreas* notes that when glucose is off target three to
+four hours after a meal, the I:C ratio is usually to blame — so a meal whose
+glucose came *back* to where it started is evidence the ratio used on it worked.
+A meal counts only if every one of these holds:
+
+| Filter | Why |
+|---|---|
+| Carbs logged in **grams** | A meal logged by size has no number; inventing one would poison the estimate |
+| Exactly one bolus within 20 min | Otherwise the pairing is a guess |
+| No other insulin within 4 h | Overlapping doses make the outcome unattributable |
+| No other food within 4 h | Same |
+| No workout overlapping | Exercise shifts sensitivity by an unknown amount |
+| Glucose either side, back to baseline | This is the actual evidence |
+
+The result is the **median** across surviving meals, so one mis-logged meal
+can't drag it. Meals that were dropped are listed with the reason, so a ratio
+from three meals never looks like one from twenty. When the two methods disagree
+by more than a quarter, the card says so rather than averaging them.
+
+> **If basal isn't logged**, total daily insulin is understated and the 500 Rule
+> figure reads *higher* than it should — which would mean too little insulin per
+> gram. The card warns when no basal appears in the window.
+
+> This describes what already happened. It is not a dose recommendation, and the
+> 500 Rule inherits any error in your current basal and bolus doses.
+
 ## Apple Health
 
 The iPhone app reads two things from Health, and writes nothing back:

@@ -37,6 +37,33 @@ struct HistoryView: View {
             .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
     }
 
+    /// The 7-day carb-ratio estimate.
+    ///
+    /// Meals logged by size carry no gram figure, so they are passed through as
+    /// `mealWithoutAmount` and counted as rejected rather than guessed at.
+    private var carbRatio: CarbRatio.Estimate {
+        let events: [CarbRatio.Event] = entries.compactMap { entry in
+            let kind: CarbRatio.Event.Kind
+            switch entry.kind {
+            case .insulin: kind = .bolus
+            case .basal: kind = .basal
+            case .carbs: kind = .carbsInGrams
+            case .meal: kind = .mealWithoutAmount
+            }
+            return CarbRatio.Event(date: entry.timestamp, kind: kind, amount: entry.amount)
+        }
+
+        return CarbRatio.estimate(
+            events: events,
+            glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
+            exclusions: health.workouts.map { .init(start: $0.start, end: $0.end) },
+            // A meal counts as "returned to baseline" within this much of where
+            // it started, in whichever unit Health is set to.
+            glucoseReturnTolerance: health.glucoseUnitLabel.contains("mol") ? 1.7 : 30,
+            now: now
+        )
+    }
+
     /// Whether anything is still working — decides if the chart is shown at all.
     private func hasActiveInsulin(_ doses: [InsulinMath.Dose], at date: Date) -> Bool {
         InsulinMath.insulinOnBoard(doses, at: date) > 0.005
@@ -74,6 +101,10 @@ struct HistoryView: View {
                             Section("Glucose") {
                                 GlucoseCard(health: health, latest: latest, now: now)
                             }
+                        }
+
+                        Section("Carb ratio · last 7 days") {
+                            CarbRatioCard(estimate: carbRatio)
                         }
 
                         ForEach(groupedByDay, id: \.day) { group in
