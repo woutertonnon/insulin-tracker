@@ -1,52 +1,50 @@
 import Foundation
 
-/// Running estimate of the insulin-to-carb ratio — grams of carbohydrate
-/// covered by one unit of rapid-acting insulin.
+/// Running estimate of the insulin-to-carb ratio, derived from what actually
+/// happened after each meal.
 ///
-/// Built around one asymmetry: **insulin logging is reliable, meal logging is
-/// not.** So the headline estimate uses no meal data whatever, and meals are
-/// used only where an episode can be shown to have gone well.
+/// The method, end to end:
 ///
-/// Both methods come from Gary Scheiner, *Think Like a Pancreas*, ch. 7:
+/// 1. Find meals with carbs **in grams** and a bolus in the hour before them.
+/// 2. Read glucose at the meal and again four hours later.
+/// 3. Convert the glucose miss into the insulin that was missing, and back out
+///    the ratio that *would* have landed flat.
 ///
-/// * **The 500 Rule** — `I:C = 500 / TDI`, on the assumption that a person
-///   consumes and produces roughly 500 g of carbohydrate a day. Needs only
-///   total daily insulin, basal included.
-/// * **Empirical verification** — "if glucose levels are often above or below
-///   target three to four hours after a meal, the I:C ratio is usually to
-///   blame." Inverted here: a meal whose glucose *did* come back to where it
-///   started is evidence the ratio used on it worked.
+/// Step 3 needs to know how far one unit moves glucose — the insulin
+/// sensitivity factor. Rather than assume it, ISF is measured from **correction
+/// boluses**: insulin taken with no food near it, where the whole glucose fall
+/// is attributable to the dose. Both inputs are things this app records
+/// reliably; neither depends on meals being logged faithfully.
 ///
-/// Nothing here is a dosing instruction. It describes what has already
-/// happened.
+/// Estimates are split by time of day and by whether exercise overlapped,
+/// because both genuinely change the answer — the book notes most people need
+/// their lowest ratio in the morning.
+///
+/// Nothing here is a dosing instruction. It describes what already happened.
 enum CarbRatio {
 
     // MARK: - Inputs
 
-    /// A glucose reading, in whatever unit the caller is working in.
     struct GlucosePoint: Hashable, Sendable {
         let date: Date
         let value: Double
     }
 
-    /// A period to exclude — a workout. Exercise changes insulin sensitivity by
-    /// an unknown amount, so any meal overlapping one is not evidence.
+    /// A workout. Not an exclusion any more — meals overlapping one are
+    /// estimated separately, since that is its own ratio.
     struct Exclusion: Hashable, Sendable {
         let start: Date
         let end: Date
     }
 
-    /// One logged event, reduced to what the estimator needs.
     struct Event: Hashable, Sendable {
         enum Kind: Hashable, Sendable {
-            /// Rapid-acting bolus, in units.
             case bolus
-            /// Long-acting basal, in units. Counts toward TDI, never toward a meal.
             case basal
-            /// Carbohydrate in grams — a real number, usable as evidence.
+            /// Carbohydrate in grams — the only food that can carry evidence.
             case carbsInGrams
-            /// A meal logged by size only. Deliberately unusable: there is no
-            /// gram figure, and inventing one would poison the estimate.
+            /// Logged by size only. No gram figure, so unusable, and never
+            /// guessed at.
             case mealWithoutAmount
         }
         let date: Date
@@ -54,159 +52,240 @@ enum CarbRatio {
         let amount: Double
     }
 
+    // MARK: - Segmentation
+
+    /// Three parts of the day, covering all 24 hours so nothing is discarded.
+    enum Daypart: String, CaseIterable, Sendable {
+        case morning = "Morning"
+        case lunch = "Lunch"
+        case dinner = "Dinner"
+
+        /// Morning 04:00–11:00, lunch 11:00–17:00, dinner 17:00–04:00. A late
+        /// snack lands in dinner rather than in a fourth bucket too sparse to
+        /// estimate anything from.
+        static func of(_ date: Date, calendar: Calendar = .current) -> Daypart {
+            switch calendar.component(.hour, from: date) {
+            case 4..<11: return .morning
+            case 11..<17: return .lunch
+            default: return .dinner
+            }
+        }
+    }
+
     // MARK: - Outputs
 
-    /// A meal that survived every filter: one bolus, nothing else nearby, no
-    /// exercise, and glucose back to where it started.
     struct Episode: Hashable, Sendable, Identifiable {
         let date: Date
         let carbs: Double
         let units: Double
         let glucoseStart: Double
         let glucoseEnd: Double
+        let daypart: Daypart
+        let withExercise: Bool
 
         var id: Date { date }
-        var ratio: Double { carbs / units }
+        /// Positive means it finished high — the dose was short.
+        var glucoseDelta: Double { glucoseEnd - glucoseStart }
+
+        /// The dose that would have landed flat, given how far a unit moves
+        /// this person's glucose.
+        func idealUnits(isf: Double) -> Double { units + glucoseDelta / isf }
+
+        /// Ratio implied by this meal. Nil when the correction implies a
+        /// nonsensical dose, or a ratio outside anything physiological.
+        func ratio(isf: Double) -> Double? {
+            let ideal = idealUnits(isf: isf)
+            guard ideal >= 0.2 else { return nil }
+            let r = carbs / ideal
+            return (plausibleRatios ~= r) ? r : nil
+        }
     }
 
-    /// Why a meal was not counted. Shown so the number is never a bare
-    /// assertion — a ratio from two meals should not look like one from twenty.
-    enum Rejection: String, Hashable, Sendable, CaseIterable {
-        case noBolus = "no bolus near the meal"
+    /// One time-of-day × exercise combination.
+    struct Cell: Identifiable, Sendable {
+        let daypart: Daypart
+        let withExercise: Bool
+        let ratio: Double?
+        let episodeCount: Int
+
+        var id: String { "\(daypart.rawValue)-\(withExercise)" }
+    }
+
+    enum Rejection: String, Hashable, Sendable {
+        case noBolusBefore = "no bolus in the hour before"
         case insulinStacked = "other insulin within 4 h"
         case otherFood = "other food within 4 h"
         case sizeOnly = "logged as a size, no grams"
-        case exercise = "exercise overlapped"
-        case noGlucose = "no glucose either side"
-        case glucoseMoved = "glucose did not return to baseline"
+        case noGlucose = "no glucose at the meal or 4 h later"
+        case implausible = "implied an impossible ratio"
     }
 
     struct Estimate: Sendable {
-        /// From the 500 Rule. Nil when there is too little insulin history.
-        let fromTotalInsulin: Double?
-        /// Median across accepted episodes. Nil below `minimumEpisodes`.
-        let fromMeals: Double?
-        /// Average units per day over the window, basal included.
-        let totalDailyInsulin: Double?
-        /// Days in the window that carried any insulin at all.
-        let daysCovered: Int
+        /// Glucose moved per unit, measured from corrections. Nil when too few
+        /// clean corrections exist, which disables the whole method.
+        let isf: Double?
+        let isfSampleCount: Int
+        let cells: [Cell]
+        /// All usable meals together — shown when a cell is too thin on its own.
+        let pooled: Double?
         let episodes: [Episode]
         let rejections: [Rejection: Int]
-        /// True when no basal was logged, which makes TDI — and therefore the
-        /// 500 Rule figure — too low, and the ratio it yields too high.
-        let basalMissing: Bool
     }
 
     // MARK: - Parameters
 
-    /// The running window. Long enough to average out single odd days, short
-    /// enough to follow a real change in sensitivity.
     static let window: TimeInterval = 7 * 24 * 3600
 
-    /// Carb entry and bolus must be within this of each other to be one meal.
-    static let pairingWindow: TimeInterval = 20 * 60
+    /// A bolus this far before the meal counts as covering it. The small tail
+    /// after exists because the watch logs one value per turn of the crown, so
+    /// dose and meal land seconds apart in whichever order they were dialled.
+    static let bolusLead: TimeInterval = 60 * 60
+    static let bolusTrail: TimeInterval = 15 * 60
 
-    /// The book's "three to four hours after a meal" — where the ratio shows.
-    static let outcomeDelay: TimeInterval = 3.5 * 3600
+    /// How long after the meal the outcome is read.
+    static let outcomeDelay: TimeInterval = 4 * 3600
 
-    /// A glucose reading must be this close to the moment it stands for.
+    /// A workout anywhere in this span around the meal makes it an
+    /// exercise meal — sensitivity is already shifted beforehand.
+    static let exerciseLead: TimeInterval = 2 * 3600
+
     private static let glucoseTolerance: TimeInterval = 20 * 60
 
-    /// Below this many clean meals the meal-based figure is not shown at all.
-    static let minimumEpisodes = 3
+    /// Ratios outside this are a logging error, not a physiology.
+    private static let plausibleRatios: ClosedRange<Double> = 2...60
 
-    /// Below this many days the 500 Rule figure is not shown either.
-    static let minimumDays = 3
+    static let minimumEpisodes = 3
+    static let minimumCorrections = 2
 
     // MARK: - Estimating
 
     static func estimate(events: [Event],
                          glucose: [GlucosePoint],
                          exclusions: [Exclusion],
-                         glucoseReturnTolerance: Double,
                          now: Date = .now) -> Estimate {
         let since = now.addingTimeInterval(-window)
         let recent = events.filter { $0.date > since && $0.date <= now }
 
-        // ---- 500 Rule: insulin only, so meal logging cannot affect it.
-        let insulinEvents = recent.filter { $0.kind == .bolus || $0.kind == .basal }
-        let totalUnits = insulinEvents.reduce(0.0) { $0 + $1.amount }
-        let calendar = Calendar.current
-        let days = Set(insulinEvents.map { calendar.startOfDay(for: $0.date) }).count
-        let tdi = days > 0 ? totalUnits / Double(days) : nil
-        let fromInsulin = (days >= minimumDays && (tdi ?? 0) > 0) ? 500 / tdi! : nil
+        let isfSamples = correctionSensitivities(recent: recent, glucose: glucose)
+        let isf = isfSamples.count >= minimumCorrections ? median(isfSamples) : nil
 
-        // ---- Meal episodes, each of which must earn its place.
         var episodes: [Episode] = []
         var rejections: [Rejection: Int] = [:]
         func reject(_ r: Rejection) { rejections[r, default: 0] += 1 }
 
-        for meal in recent where meal.kind == .mealWithoutAmount {
-            reject(.sizeOnly)
-        }
+        for meal in recent where meal.kind == .mealWithoutAmount { reject(.sizeOnly) }
 
         for meal in recent where meal.kind == .carbsInGrams && meal.amount > 0 {
-            let boluses = recent.filter {
-                $0.kind == .bolus && abs($0.date.timeIntervalSince(meal.date)) <= pairingWindow
+            // A bolus in the hour before the meal, or moments after it.
+            let covering = recent.filter {
+                guard $0.kind == .bolus else { return false }
+                let offset = meal.date.timeIntervalSince($0.date)
+                return offset >= -bolusTrail && offset <= bolusLead
             }
-            guard boluses.count == 1, let bolus = boluses.first, bolus.amount > 0 else {
-                reject(.noBolus)
+            guard covering.count == 1, let bolus = covering.first, bolus.amount > 0 else {
+                reject(.noBolusBefore)
                 continue
             }
 
-            // Nothing else may be acting across the window, or the outcome
-            // cannot be attributed to this meal.
             let from = meal.date.addingTimeInterval(-InsulinMath.duration)
-            let to = meal.date.addingTimeInterval(InsulinMath.duration)
-            let otherInsulin = recent.contains {
-                $0.kind == .bolus && $0 != bolus && $0.date > from && $0.date < to
-            }
-            if otherInsulin { reject(.insulinStacked); continue }
+            let to = meal.date.addingTimeInterval(outcomeDelay)
 
-            let otherFood = recent.contains {
+            if recent.contains(where: { $0.kind == .bolus && $0 != bolus && $0.date > from && $0.date < to }) {
+                reject(.insulinStacked)
+                continue
+            }
+            if recent.contains(where: {
                 ($0.kind == .carbsInGrams || $0.kind == .mealWithoutAmount)
                     && $0 != meal && $0.date > from && $0.date < to
+            }) {
+                reject(.otherFood)
+                continue
             }
-            if otherFood { reject(.otherFood); continue }
-
-            let outcomeAt = meal.date.addingTimeInterval(outcomeDelay)
-            let overlapped = exclusions.contains {
-                $0.end > meal.date.addingTimeInterval(-3600) && $0.start < outcomeAt
-            }
-            if overlapped { reject(.exercise); continue }
 
             guard let g0 = nearest(glucose, to: meal.date),
-                  let g1 = nearest(glucose, to: outcomeAt) else {
+                  let g1 = nearest(glucose, to: meal.date.addingTimeInterval(outcomeDelay)) else {
                 reject(.noGlucose)
                 continue
             }
 
-            // The whole point: only a meal that ended where it started shows a
-            // ratio that actually worked.
-            guard abs(g1.value - g0.value) <= glucoseReturnTolerance else {
-                reject(.glucoseMoved)
-                continue
+            let exercised = exclusions.contains {
+                $0.end > meal.date.addingTimeInterval(-exerciseLead) && $0.start < to
             }
 
-            episodes.append(Episode(date: meal.date,
-                                    carbs: meal.amount,
-                                    units: bolus.amount,
-                                    glucoseStart: g0.value,
-                                    glucoseEnd: g1.value))
+            let episode = Episode(date: meal.date,
+                                  carbs: meal.amount,
+                                  units: bolus.amount,
+                                  glucoseStart: g0.value,
+                                  glucoseEnd: g1.value,
+                                  daypart: Daypart.of(meal.date),
+                                  withExercise: exercised)
+
+            if let isf, episode.ratio(isf: isf) == nil {
+                reject(.implausible)
+                continue
+            }
+            episodes.append(episode)
         }
 
-        // Median, not mean: one mis-logged meal should not drag the figure.
-        let fromMeals = episodes.count >= minimumEpisodes
-            ? median(episodes.map(\.ratio))
-            : nil
+        let ratioOf: (Episode) -> Double? = { episode in
+            guard let isf else { return nil }
+            return episode.ratio(isf: isf)
+        }
 
-        return Estimate(fromTotalInsulin: fromInsulin,
-                        fromMeals: fromMeals,
-                        totalDailyInsulin: tdi,
-                        daysCovered: days,
+        var cells: [Cell] = []
+        for daypart in Daypart.allCases {
+            for exercised in [false, true] {
+                let matching = episodes.filter { $0.daypart == daypart && $0.withExercise == exercised }
+                let ratios = matching.compactMap(ratioOf)
+                cells.append(Cell(daypart: daypart,
+                                  withExercise: exercised,
+                                  ratio: ratios.count >= minimumEpisodes ? median(ratios) : nil,
+                                  episodeCount: matching.count))
+            }
+        }
+
+        let allRatios = episodes.compactMap(ratioOf)
+
+        return Estimate(isf: isf,
+                        isfSampleCount: isfSamples.count,
+                        cells: cells,
+                        pooled: allRatios.count >= minimumEpisodes ? median(allRatios) : nil,
                         episodes: episodes.sorted { $0.date > $1.date },
-                        rejections: rejections,
-                        basalMissing: !insulinEvents.contains { $0.kind == .basal })
+                        rejections: rejections)
+    }
+
+    // MARK: - ISF from corrections
+
+    /// Glucose moved per unit, from boluses taken with no food near them.
+    ///
+    /// With nothing eaten, the whole fall over the action window is the dose's
+    /// doing, which is what makes these usable where meals are not.
+    private static func correctionSensitivities(recent: [Event],
+                                                glucose: [GlucosePoint]) -> [Double] {
+        var samples: [Double] = []
+        for bolus in recent where bolus.kind == .bolus && bolus.amount > 0 {
+            let from = bolus.date.addingTimeInterval(-InsulinMath.duration)
+            let to = bolus.date.addingTimeInterval(outcomeDelay)
+
+            let foodNearby = recent.contains {
+                ($0.kind == .carbsInGrams || $0.kind == .mealWithoutAmount)
+                    && $0.date > from && $0.date < to
+            }
+            if foodNearby { continue }
+
+            let otherInsulin = recent.contains {
+                $0.kind == .bolus && $0 != bolus && $0.date > from && $0.date < to
+            }
+            if otherInsulin { continue }
+
+            guard let g0 = nearest(glucose, to: bolus.date),
+                  let g1 = nearest(glucose, to: to) else { continue }
+
+            let drop = g0.value - g1.value
+            guard drop > 0 else { continue }
+            samples.append(drop / bolus.amount)
+        }
+        return samples
     }
 
     // MARK: - Helpers

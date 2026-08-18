@@ -226,40 +226,45 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 
 ## Carb ratio
 
-A running 7-day estimate of the insulin-to-carb ratio, built around one
-asymmetry: **insulin logging is reliable, meal logging is not.**
+A running 7-day insulin-to-carb ratio, measured from **what actually happened
+after each meal** — no rules of thumb.
 
-**The headline figure uses no meal data at all.** It is the book's *500 Rule* —
-`I:C = 500 ÷ total daily insulin`, basal included — which rests on the
-assumption that a person consumes and produces about 500 g of carbohydrate a
-day. Nothing you do or don't log about food can move it.
+For every meal logged in **grams** with a bolus in the hour before it, glucose is
+read at the meal and again four hours later. The miss is converted into the
+insulin that was missing, which gives the ratio that *would* have landed flat:
 
-**The second figure is corroboration from meals that can be shown to have gone
-well.** *Think Like a Pancreas* notes that when glucose is off target three to
-four hours after a meal, the I:C ratio is usually to blame — so a meal whose
-glucose came *back* to where it started is evidence the ratio used on it worked.
-A meal counts only if every one of these holds:
+```
+ideal units = units given + (glucose end − glucose start) / ISF
+ratio       = carbs / ideal units
+```
 
-| Filter | Why |
-|---|---|
-| Carbs logged in **grams** | A meal logged by size has no number; inventing one would poison the estimate |
-| Exactly one bolus within 20 min | Otherwise the pairing is a guess |
-| No other insulin within 4 h | Overlapping doses make the outcome unattributable |
-| No other food within 4 h | Same |
-| No workout overlapping | Exercise shifts sensitivity by an unknown amount |
-| Glucose either side, back to baseline | This is the actual evidence |
+That needs ISF — how far one unit moves you — so it is **measured, not assumed**,
+from *correction boluses*: insulin taken with no food within four hours, where
+the whole glucose fall is the dose's doing. Both ingredients are things the app
+records reliably, and neither depends on meals being logged faithfully.
 
-The result is the **median** across surviving meals, so one mis-logged meal
-can't drag it. Meals that were dropped are listed with the reason, so a ratio
-from three meals never looks like one from twenty. When the two methods disagree
-by more than a quarter, the card says so rather than averaging them.
+Results are split six ways, because both dimensions genuinely change the answer
+and the book notes most people need their lowest ratio in the morning:
 
-> **If basal isn't logged**, total daily insulin is understated and the 500 Rule
-> figure reads *higher* than it should — which would mean too little insulin per
-> gram. The card warns when no basal appears in the window.
+|  | No exercise | With exercise |
+|---|---|---|
+| **Morning** 04–11 | ● | ● |
+| **Lunch** 11–17 | ● | ● |
+| **Dinner** 17–04 | ● | ● |
 
-> This describes what already happened. It is not a dose recommendation, and the
-> 500 Rule inherits any error in your current basal and bolus doses.
+Each cell is the **median** over its meals, so one mis-logged meal can't drag it.
+A cell with fewer than 3 meals shows its count instead of a number, and every
+rejected meal is listed with the reason.
+
+A meal is used only if it has carbs in grams, exactly one bolus in the hour
+before (or moments after — the watch logs dose and meal seconds apart), no other
+insulin or food within 4 h, and glucose either side. Meals logged by size carry
+no gram figure and are never assigned a guessed one.
+
+> Six cells over seven days is thin, especially the exercise column. Expect the
+> counts to matter as much as the ratios at first.
+
+> This describes what already happened. It is not a dose recommendation.
 
 ## Apple Health
 

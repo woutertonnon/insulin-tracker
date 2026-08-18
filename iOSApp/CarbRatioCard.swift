@@ -1,94 +1,114 @@
 import SwiftUI
 
-/// Running 7-day insulin-to-carb ratio.
+/// Insulin-to-carb ratio measured from how meals actually behaved, split by
+/// time of day and by whether exercise overlapped.
 ///
-/// Shows the insulin-only figure as the headline, because that is the one your
-/// meal logging cannot distort, and the meal-derived figure beside it as
-/// corroboration. When they disagree, that disagreement is the interesting part
-/// and is stated rather than averaged away.
+/// Cells with too few meals show their count rather than a number. A ratio
+/// drawn from two meals and one drawn from twenty should not look alike.
 struct CarbRatioCard: View {
     let estimate: CarbRatio.Estimate
+    /// For labelling the measured sensitivity, e.g. "mmol/L".
+    let glucoseUnit: String
+
+    private var hasAnything: Bool {
+        estimate.pooled != nil || estimate.cells.contains { $0.ratio != nil }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if estimate.fromTotalInsulin == nil && estimate.fromMeals == nil {
-                notEnoughYet
+        VStack(alignment: .leading, spacing: 12) {
+            if estimate.isf == nil {
+                needsCorrections
+            } else if !hasAnything {
+                needsMeals
             } else {
-                figures
-                agreement
-                evidence
+                grid
+                if let pooled = estimate.pooled {
+                    Text("All meals together: **\(CarbRatio.format(pooled))**")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                sensitivity
             }
-            caveats
+            evidence
+            method
         }
         .padding(.vertical, 4)
     }
 
-    private var notEnoughYet: some View {
+    // MARK: - States
+
+    private var needsCorrections: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Not enough yet")
+            Text("Needs a correction dose first")
                 .font(.headline)
-            Text("Needs insulin logged on at least \(CarbRatio.minimumDays) of the last 7 days. Days covered so far: \(estimate.daysCovered).")
+            Text("Turning a glucose miss into missing units needs to know how far one unit moves you. That is measured from boluses taken with no food within four hours — \(estimate.isfSampleCount) found so far, \(CarbRatio.minimumCorrections) needed.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var figures: some View {
-        HStack(alignment: .top, spacing: 20) {
-            if let insulin = estimate.fromTotalInsulin {
-                figure(title: "From insulin",
-                       value: CarbRatio.format(insulin),
-                       detail: tdiText,
-                       tint: Self.primary)
+    private var needsMeals: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Not enough meals yet")
+                .font(.headline)
+            Text("Needs meals logged in grams with a bolus in the hour before, and glucose either side. \(CarbRatio.minimumEpisodes) per slot.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - The grid
+
+    private var grid: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+            GridRow {
+                Text("").gridCellUnsizedAxes(.horizontal)
+                Text("No exercise").font(.caption2).foregroundStyle(.secondary)
+                Text("With exercise").font(.caption2).foregroundStyle(.secondary)
             }
-            if let meals = estimate.fromMeals {
-                figure(title: "From clean meals",
-                       value: CarbRatio.format(meals),
-                       detail: "\(estimate.episodes.count) meal\(estimate.episodes.count == 1 ? "" : "s")",
-                       tint: Self.secondaryTint)
+            ForEach(CarbRatio.Daypart.allCases, id: \.self) { part in
+                GridRow {
+                    Text(part.rawValue)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    cell(for: part, exercise: false)
+                    cell(for: part, exercise: true)
+                }
             }
         }
     }
 
-    private func figure(title: String, value: String, detail: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(tint)
-            Text(detail)
+    @ViewBuilder
+    private func cell(for part: CarbRatio.Daypart, exercise: Bool) -> some View {
+        let match = estimate.cells.first { $0.daypart == part && $0.withExercise == exercise }
+        VStack(alignment: .leading, spacing: 0) {
+            if let ratio = match?.ratio {
+                Text(CarbRatio.format(ratio))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(exercise ? Self.exerciseTint : Self.primary)
+                Text("\(match?.episodeCount ?? 0) meals")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("—")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                Text("\(match?.episodeCount ?? 0) of \(CarbRatio.minimumEpisodes)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sensitivity: some View {
+        if let isf = estimate.isf {
+            Text("Measured sensitivity: 1 U moves you \(String(format: "%.1f", isf)) \(glucoseUnit), from \(estimate.isfSampleCount) correction\(estimate.isfSampleCount == 1 ? "" : "s").")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
     }
 
-    private var tdiText: String {
-        guard let tdi = estimate.totalDailyInsulin else { return "—" }
-        return "\(InsulinMath.format(tdi)) U/day over \(estimate.daysCovered) d"
-    }
-
-    /// Two independent methods landing far apart is a signal in itself.
-    @ViewBuilder
-    private var agreement: some View {
-        if let a = estimate.fromTotalInsulin, let b = estimate.fromMeals {
-            let spread = abs(a - b) / max(a, b)
-            if spread > 0.25 {
-                Label("The two disagree by more than a quarter. Meals that went well suggest \(CarbRatio.format(b)); your total insulin suggests \(CarbRatio.format(a)).",
-                      systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            } else {
-                Label("Both methods agree within a quarter.", systemImage: "checkmark.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// What was thrown away, and why. A ratio drawn from three meals should not
-    /// look the same as one drawn from twenty.
     @ViewBuilder
     private var evidence: some View {
         let rejected = estimate.rejections.filter { $0.value > 0 }
@@ -106,18 +126,10 @@ struct CarbRatioCard: View {
         }
     }
 
-    private var caveats: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if estimate.basalMissing {
-                Label("No basal logged in the last 7 days, so total daily insulin is understated and the insulin-based ratio reads higher than it should.",
-                      systemImage: "exclamationmark.triangle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-            }
-            Text("500 Rule (Think Like a Pancreas): 500 ÷ total daily insulin. Meal figure is the median of meals with one bolus, no other food or insulin within 4 h, no exercise, and glucose back to its starting value 3½ h later. An observation, not a dose recommendation.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
+    private var method: some View {
+        Text("For each meal with carbs in grams and a bolus in the hour before: glucose at the meal versus four hours later, with the miss converted into the units that were missing, giving the ratio that would have landed flat. Median per slot. An observation, not a dose recommendation.")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
     }
 
     // MARK: - Palette
@@ -128,7 +140,7 @@ struct CarbRatioCard: View {
             : UIColor(red: 0x2a / 255, green: 0x78 / 255, blue: 0xd6 / 255, alpha: 1)
     })
 
-    private static let secondaryTint = Color(uiColor: UIColor { traits in
+    private static let exerciseTint = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 0x19 / 255, green: 0x9e / 255, blue: 0x70 / 255, alpha: 1)
             : UIColor(red: 0x1b / 255, green: 0xaf / 255, blue: 0x7a / 255, alpha: 1)

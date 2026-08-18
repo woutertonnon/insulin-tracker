@@ -21,8 +21,12 @@ struct HistoryView: View {
     /// stays the source of truth for both.
     @StateObject private var health = HealthStore()
 
-    /// How far back Health is queried. Matches the chart's scrollable range.
-    private var healthWindow: Date { now.addingTimeInterval(-2 * InsulinMath.duration) }
+    /// How far back Health is queried.
+    ///
+    /// Driven by the carb-ratio window, not the chart's: the chart needs eight
+    /// hours, but every meal in the last seven days needs glucose either side
+    /// of it to be usable as evidence.
+    private var healthWindow: Date { now.addingTimeInterval(-CarbRatio.window) }
 
     /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
     /// its action profile isn't described by this curve.
@@ -57,9 +61,6 @@ struct HistoryView: View {
             events: events,
             glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
             exclusions: health.workouts.map { .init(start: $0.start, end: $0.end) },
-            // A meal counts as "returned to baseline" within this much of where
-            // it started, in whichever unit Health is set to.
-            glucoseReturnTolerance: health.glucoseUnitLabel.contains("mol") ? 1.7 : 30,
             now: now
         )
     }
@@ -104,7 +105,8 @@ struct HistoryView: View {
                         }
 
                         Section("Carb ratio · last 7 days") {
-                            CarbRatioCard(estimate: carbRatio)
+                            CarbRatioCard(estimate: carbRatio,
+                                          glucoseUnit: health.glucoseUnitLabel)
                         }
 
                         ForEach(groupedByDay, id: \.day) { group in
