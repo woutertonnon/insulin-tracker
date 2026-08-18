@@ -240,8 +240,20 @@ ratio       = carbs / ideal units
 
 That needs ISF — how far one unit moves you — so it is **measured, not assumed**,
 from *correction boluses*: insulin taken with no food within four hours, where
-the whole glucose fall is the dose's doing. Both ingredients are things the app
-records reliably, and neither depends on meals being logged faithfully.
+the whole glucose fall is the dose's doing.
+
+Identifying those corrections can't rely on the log, though. Unlogged meals are
+the premise of this whole feature, and an unlogged meal plus its bolus looks
+exactly like a correction — it would drag ISF down and distort every ratio built
+on it. **The CGM curve is the arbiter instead**, since it doesn't depend on
+anyone remembering anything: carbohydrate absorbing pushes glucose *above* where
+it started, and a dose acting alone never does. Any window containing a rise of
+more than 10% above the starting value is discarded, logged or not. The
+threshold is a fraction rather than an absolute so it holds in mmol/L and mg/dL
+alike.
+
+A correction also has to move at least 8% and be at least 0.5 U, or the division
+is dominated by sensor noise.
 
 Results are split six ways, because both dimensions genuinely change the answer
 and the book notes most people need their lowest ratio in the morning:
@@ -263,6 +275,12 @@ no gram figure and are never assigned a guessed one.
 
 > Six cells over seven days is thin, especially the exercise column. Expect the
 > counts to matter as much as the ratios at first.
+
+> The unlogged-food filter protects the ISF measurement, not the meals
+> themselves. An unlogged snack *during* a meal's four-hour window still
+> distorts that meal — it looks like the meal ran high, so the ratio reads
+> tighter than it is. The median across meals limits the damage; it does not
+> eliminate it.
 
 > This describes what already happened. It is not a dose recommendation.
 

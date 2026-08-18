@@ -154,6 +154,17 @@ enum CarbRatio {
     /// Ratios outside this are a logging error, not a physiology.
     private static let plausibleRatios: ClosedRange<Double> = 2...60
 
+    /// A rise this far above the starting value, as a fraction, means food was
+    /// absorbing — whether or not it was logged.
+    private static let unloggedFoodRise = 0.10
+
+    /// Minimum fall, as a fraction of the starting value, for a correction to
+    /// carry signal rather than sensor noise.
+    private static let minimumFall = 0.08
+
+    /// Doses below this make the division too sensitive to be worth it.
+    private static let minimumCorrectionUnits = 0.5
+
     static let minimumEpisodes = 3
     static let minimumCorrections = 2
 
@@ -264,6 +275,17 @@ enum CarbRatio {
     ///
     /// With nothing eaten, the whole fall over the action window is the dose's
     /// doing, which is what makes these usable where meals are not.
+    ///
+    /// The catch is that "no food" cannot be established from the log — the
+    /// premise of this whole feature is that meals often go unlogged, and an
+    /// unlogged meal with its bolus is indistinguishable from a correction by
+    /// the log alone. It would drag ISF down and distort every ratio derived
+    /// from it.
+    ///
+    /// So the CGM curve is the arbiter instead, because it does not depend on
+    /// anyone remembering anything: carbohydrate absorbing pushes glucose
+    /// *above* where it started, and a dose acting alone never does. Any window
+    /// containing such a rise is discarded, logged meal or not.
     private static func correctionSensitivities(recent: [Event],
                                                 glucose: [GlucosePoint]) -> [Double] {
         var samples: [Double] = []
@@ -285,8 +307,20 @@ enum CarbRatio {
             guard let g0 = nearest(glucose, to: bolus.date),
                   let g1 = nearest(glucose, to: to) else { continue }
 
+            // A rise above the starting value means something was absorbing.
+            // Expressed as a fraction so it holds in mmol/L and mg/dL alike —
+            // both are ratio scales, so a percentage is unit-free where any
+            // absolute margin would not be.
+            let peak = glucose
+                .filter { $0.date >= bolus.date && $0.date <= to }
+                .map(\.value)
+                .max() ?? g0.value
+            guard peak <= g0.value * (1 + unloggedFoodRise) else { continue }
+
+            // A fall too small to separate from sensor noise divides badly.
             let drop = g0.value - g1.value
-            guard drop > 0 else { continue }
+            guard drop >= g0.value * minimumFall else { continue }
+            guard bolus.amount >= minimumCorrectionUnits else { continue }
             samples.append(drop / bolus.amount)
         }
         return samples
