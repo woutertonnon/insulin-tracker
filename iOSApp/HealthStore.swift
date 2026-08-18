@@ -71,7 +71,10 @@ final class HealthStore: ObservableObject {
     }
 
     private func refreshUnit() async {
-        guard let unit = try? await store.preferredUnits(for: [glucoseType])[glucoseType] else { return }
+        // Split rather than subscripting the awaited call directly: `try?` would
+        // wrap the whole expression, leaving a doubly-optional result.
+        let units = try? await store.preferredUnits(for: [glucoseType])
+        guard let unit = units?[glucoseType] else { return }
         glucoseUnit = unit
         glucoseUnitLabel = unit.unitString
     }

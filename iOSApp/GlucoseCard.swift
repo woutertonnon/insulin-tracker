@@ -79,7 +79,10 @@ struct GlucoseCard: View {
             Spacer(minLength: 8)
             Text(latest.date, style: .relative)
                 .font(.caption2)
-                .foregroundStyle(isStale ? .orange : .secondary)
+                // Both branches spelled as Color: .orange and .secondary are
+                // different ShapeStyle types, so a bare ternary has no common
+                // type to settle on.
+                .foregroundStyle(isStale ? Color.orange : Color.secondary)
                 .lineLimit(1)
         }
     }
