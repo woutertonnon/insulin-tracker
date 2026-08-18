@@ -127,7 +127,7 @@ struct HistoryView: View {
             }
             .task {
                 await health.requestAccess()
-                await health.refresh(since: healthWindow)
+                await health.refresh(since: healthWindow, force: true)
             }
         }
     }

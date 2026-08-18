@@ -76,10 +76,28 @@ final class HealthStore: ObservableObject {
         glucoseUnitLabel = unit.unitString
     }
 
+    /// Least time between Health queries.
+    ///
+    /// The view ticks every minute to slide the insulin curve, but Health is
+    /// not worth re-querying that often: Dexcom uploads in batches and workouts
+    /// land when they end, so a minute-by-minute query would mostly return the
+    /// same samples.
+    private static let minimumRefreshInterval: TimeInterval = 5 * 60
+    private var lastRefresh: Date?
+
     /// Pull both series covering `since`. Failures leave the previous values
     /// in place rather than blanking the UI.
-    func refresh(since: Date) async {
+    ///
+    /// - Parameter force: bypass the interval — used on first appearance, where
+    ///   waiting five minutes for anything to show would be absurd.
+    func refresh(since: Date, force: Bool = false) async {
         guard Self.isAvailable else { return }
+        if !force,
+           let last = lastRefresh,
+           Date.now.timeIntervalSince(last) < Self.minimumRefreshInterval {
+            return
+        }
+        lastRefresh = .now
         async let w = fetchWorkouts(since: since)
         async let g = fetchGlucose(since: since)
         let (fetchedWorkouts, fetchedGlucose) = await (w, g)
