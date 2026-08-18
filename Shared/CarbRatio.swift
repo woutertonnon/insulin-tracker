@@ -202,7 +202,11 @@ enum CarbRatio {
                 continue
             }
 
-            guard let g0 = nearest(glucose, to: meal.date),
+            // Anchored at the bolus, not the meal. With a pre-bolus the insulin
+            // has already been pulling glucose down before the first bite, and
+            // reading from the meal would miss that fall and credit the dose
+            // with less work than it did.
+            guard let g0 = nearest(glucose, to: bolus.date),
                   let g1 = nearest(glucose, to: meal.date.addingTimeInterval(outcomeDelay)) else {
                 reject(.noGlucose)
                 continue
