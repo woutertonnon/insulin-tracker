@@ -2,9 +2,9 @@ import SwiftUI
 import Charts
 import UIKit
 
-/// Five day-by-day charts stacked on one shared, scrolling time axis.
+/// Six day-by-day charts stacked on one shared, scrolling time axis.
 ///
-/// Stacked rather than overlaid because the five quantities share no scale, and
+/// Stacked rather than overlaid because the six quantities share no scale, and
 /// small multiples on a common axis are the honest way to read one series
 /// against another: a training block and the notch it puts in insulin a day
 /// later line up vertically, without pretending kilocalories and millimoles
@@ -12,7 +12,7 @@ import UIKit
 ///
 /// Three pieces of state are shared by every chart, which is the whole trick —
 /// scroll position, zoom, and the selected day. Each chart reads all three, so
-/// dragging, pinching or tapping any one of them moves all five together and
+/// dragging, pinching or tapping any one of them moves all six together and
 /// the columns stay aligned down the screen.
 ///
 /// Nothing here is a dosing instruction. It describes what already happened.
@@ -71,6 +71,7 @@ struct TrendsView: View {
                 ratioPanel
                 energyPanel
                 weightPanel
+                a1cPanel
                 footnotes
             }
             .padding(.horizontal, 16)
@@ -173,10 +174,10 @@ struct TrendsView: View {
     private var glucosePanel: some View {
         panel("Average glucose",
               unit: glucoseUnit,
-              readout: readout(\.meanGlucose, { InsulinStats.formatGlucose($0, unit: glucoseUnit) }),
+              readout: readout({ $0.meanGlucose }, { InsulinStats.formatGlucose($0, unit: glucoseUnit) }),
               tint: Self.glucose,
-              highlight: selectedDay?.meanGlucose ?? nil) {
-            ForEach(points(\.meanGlucose)) { point in
+              highlight: selectedDay.flatMap({ $0.meanGlucose })) {
+            ForEach(points({ $0.meanGlucose })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Glucose", point.value))
                     .foregroundStyle(Self.glucose)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
@@ -191,7 +192,7 @@ struct TrendsView: View {
     private var insulinPanel: some View {
         panel("Total insulin",
               unit: "U",
-              readout: readout(\.totalInsulin, { InsulinStats.formatUnits($0) }),
+              readout: readout({ $0.totalInsulin }, { InsulinStats.formatUnits($0) }),
               tint: Self.bolus) {
             ForEach(insulinBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
@@ -209,10 +210,10 @@ struct TrendsView: View {
     private var ratioPanel: some View {
         panel("Insulin ÷ glucose",
               unit: "U/day per \(glucoseUnit)",
-              readout: readout(\.insulinPerGlucose, { InsulinStats.formatIndex($0, unit: glucoseUnit) }),
+              readout: readout({ $0.insulinPerGlucose }, { InsulinStats.formatIndex($0, unit: glucoseUnit) }),
               tint: Self.index,
-              highlight: selectedDay?.insulinPerGlucose ?? nil) {
-            ForEach(points(\.insulinPerGlucose)) { point in
+              highlight: selectedDay.flatMap({ $0.insulinPerGlucose })) {
+            ForEach(points({ $0.insulinPerGlucose })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Index", point.value))
                     .foregroundStyle(Self.index)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
@@ -227,7 +228,7 @@ struct TrendsView: View {
     private var energyPanel: some View {
         panel("Exercise calories",
               unit: "kcal",
-              readout: readout(\.activeEnergy, { String(Int($0.rounded())) }),
+              readout: readout({ $0.activeEnergy }, { String(Int($0.rounded())) }),
               tint: Self.workout) {
             ForEach(energyBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
@@ -251,11 +252,11 @@ struct TrendsView: View {
     private var weightPanel: some View {
         panel("Weight",
               unit: weightUnit,
-              readout: readout(\.weight, { String(format: "%.1f", $0) }),
+              readout: readout({ $0.weight }, { String(format: "%.1f", $0) }),
               yDomain: weightDomain,
               tint: Self.weight,
-              highlight: selectedDay?.weight ?? nil) {
-            ForEach(points(\.weight)) { point in
+              highlight: selectedDay.flatMap({ $0.weight })) {
+            ForEach(points({ $0.weight })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Weight", point.value))
                     .foregroundStyle(Self.weight)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
@@ -263,6 +264,31 @@ struct TrendsView: View {
                 PointMark(x: .value("Day", point.date), y: .value("Weight", point.value))
                     .foregroundStyle(Self.weight)
                     .symbolSize(18)
+            }
+        }
+    }
+
+    /// That day's mean glucose put through the ADAG regression. Nil when the
+    /// day has no mean — which is most of the reason a point goes missing here.
+    private func a1c(_ day: DailySeries.Day) -> Double? {
+        day.meanGlucose.flatMap { A1c.fromMeanGlucose($0, unit: glucoseUnit) }
+    }
+
+    /// A straight rescaling of the glucose chart — the ADAG formula is linear,
+    /// so the two curves have the same shape. It earns its place by being in
+    /// the units a target is actually held in: *if every day looked like this
+    /// one, the A1c would be this.*
+    private var a1cPanel: some View {
+        panel("Estimated A1c",
+              unit: "% · ADAG",
+              readout: readout(a1c, A1c.format),
+              tint: Self.a1cTint,
+              highlight: selectedDay.flatMap(a1c)) {
+            ForEach(points(a1c)) { point in
+                LineMark(x: .value("Day", point.date), y: .value("A1c", point.value))
+                    .foregroundStyle(Self.a1cTint)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .interpolationMethod(.monotone)
             }
         }
     }
@@ -393,9 +419,11 @@ struct TrendsView: View {
         var id: Date { date }
     }
 
-    private func points(_ metric: KeyPath<DailySeries.Day, Double?>) -> [Point] {
+    /// A closure rather than a key path: A1c is derived from a day rather than
+    /// stored on one, and a series should not have to be a field to be plotted.
+    private func points(_ value: (DailySeries.Day) -> Double?) -> [Point] {
         days.compactMap { day in
-            day[keyPath: metric].map { Point(date: plotX(day), value: $0) }
+            value(day).map { Point(date: plotX(day), value: $0) }
         }
     }
 
@@ -404,13 +432,13 @@ struct TrendsView: View {
     /// A selected day with nothing to show returns nil, which the header draws
     /// as a dash — showing the latest value instead would quietly answer a
     /// question about one day with a number from another.
-    private func readout(_ metric: KeyPath<DailySeries.Day, Double?>,
+    private func readout(_ value: (DailySeries.Day) -> Double?,
                          _ format: (Double) -> String) -> String? {
         if let selectedDay {
-            return selectedDay[keyPath: metric].map(format)
+            return value(selectedDay).map(format)
         }
         for day in days.reversed() {
-            if let value = day[keyPath: metric] { return format(value) }
+            if let found = value(day) { return format(found) }
         }
         return nil
     }
@@ -465,7 +493,7 @@ struct TrendsView: View {
 
     private var notes: [String] {
         var notes = [
-            "Drag to scroll, pinch to zoom, tap to pick a day — all five charts follow, so a day lines up down the screen.",
+            "Drag to scroll, pinch to zoom, tap to pick a day — all six charts follow, so a day lines up down the screen.",
         ]
 
         let thin = days.filter { $0.meanGlucose == nil && $0.glucoseCoverage > 0 }.count
@@ -480,6 +508,7 @@ struct TrendsView: View {
 
         notes.append("Weight is scaled to its own range plus three kilograms either side, so a small real drift is a visible slope. The other four start at zero.")
         notes.append("Exercise calories are active energy from Health, with the part spent inside a logged workout drawn darker. Weight is plotted only on days it was actually recorded; the line between dots is interpolation.")
+        notes.append("Estimated A1c is that day's mean glucose through the ADAG formula — if every day looked like that one, the A1c would be this. It is the same curve as the glucose chart in different units, and it is not a prediction of a lab result: a real A1c answers for the previous three months, weighted towards the recent end. Read the level, not the point.")
         notes.append("The index is total daily insulin per unit of glucose: it rises as sensitivity falls. A single day of it is noisy — one late dinner moves it. Read the shape over weeks, not the day-to-day.")
         return notes
     }
@@ -534,6 +563,12 @@ struct TrendsView: View {
         t.userInterfaceStyle == .dark
             ? UIColor(red: 0x9b / 255, green: 0x8a / 255, blue: 0xd4 / 255, alpha: 1)
             : UIColor(red: 0x7d / 255, green: 0x6c / 255, blue: 0xb8 / 255, alpha: 1)
+    })
+
+    private static let a1cTint = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor(red: 0xc2 / 255, green: 0x6b / 255, blue: 0x4f / 255, alpha: 1)
+            : UIColor(red: 0xb3 / 255, green: 0x5a / 255, blue: 0x3e / 255, alpha: 1)
     })
 
     private static let rule = Color(uiColor: UIColor { t in

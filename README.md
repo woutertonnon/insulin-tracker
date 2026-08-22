@@ -37,7 +37,7 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
                    + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
-                   + DailySeries + SharedStore (App Group)
+                   + DailySeries + A1c + SharedStore (App Group)
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: read-only history list
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
@@ -349,17 +349,17 @@ the card rather than left to be noticed:
 
 ## Trends
 
-Five charts stacked on one shared time axis, day by day over three months.
+Six charts stacked on one shared time axis, day by day over three months.
 Reached from the chart button in the history toolbar.
 
 Three pieces of state are shared by every chart, which is the whole trick:
 
 - **Drag** to scroll,
 - **pinch** to zoom the time axis, between three days and the full range,
-- **tap** to pick a day — a dashed rule lands on it in all five charts, and each
+- **tap** to pick a day — a dashed rule lands on it in all six charts, and each
   one's readout switches from its latest value to that day's.
 
-All five follow, so a day stays lined up down the screen. A selected day with
+All six follow, so a day stays lined up down the screen. A selected day with
 nothing to show reads as a dash rather than falling back to the latest value,
 which would answer a question about one day with a number from another.
 
@@ -370,6 +370,7 @@ which would answer a question about one day with a number from another.
 | **Insulin ÷ glucose** | that day's total insulin per unit of glucose |
 | **Exercise calories** | active energy from Health, with the workout part drawn darker |
 | **Weight** | plotted only on days it was actually recorded |
+| **Estimated A1c** | that day's mean glucose through the ADAG formula |
 
 Stacked rather than overlaid: the five share no scale, and small multiples on a
 common axis are the honest way to read one against another. A training block and
@@ -411,6 +412,39 @@ its left edge and the selection rule could only ever agree with one of them.
 Day length is asked of the calendar rather than assumed to be 86,400 seconds, so
 the twenty-five-hour and twenty-three-hour days at each clock change are not
 scored as short of readings.
+
+### Estimated A1c
+
+From the **ADAG** study's regression (Nathan et al., 2008), read backwards —
+the app has the glucose and wants the A1c:
+
+```
+eAG (mg/dL)  = 28.7 × A1c − 46.7      →   A1c = (eAG + 46.7) / 28.7
+eAG (mmol/L) = 1.59 × A1c −  2.59     →   A1c = (eAG +  2.59) / 1.59
+```
+
+Applied **per day**, which answers a question worth asking: *if every day looked
+like this one, what would the A1c be?* On those terms it is a straight rescaling
+of the glucose chart — the formula is linear, so the two curves have the same
+shape — and it earns its place by being in the units a target is held in, not by
+carrying information the glucose chart lacks.
+
+> **It is not a prediction of a lab result.** Haemoglobin carries its glycation
+> for the life of the red cell, so a real A1c answers for the previous three
+> months, weighted towards the recent end. A single day cannot say what a blood
+> test will. Read the level, not the point.
+
+Two further limits: ADAG fitted a straight line to a population, and individuals
+sit off it — red-cell lifespan varies, so the same mean glucose genuinely gives
+different people different A1cs. And CGM software more often reports **GMI**
+(Bergenstal, 2018), a different fit over a fourteen-day window, which is why an
+app's number and this one can disagree by a few tenths.
+
+`A1c.millimolesPerMole` converts to the IFCC form for labs that report mmol/mol.
+
+No target line is drawn. A1c targets are individual — looser with hypo
+unawareness, in older age, in pregnancy — and a line across this chart would be
+the app asserting a goal it has no basis for.
 
 > A single day of the index is noisy — one late dinner moves it. It is there to
 > be read as a shape over weeks, not day to day.
