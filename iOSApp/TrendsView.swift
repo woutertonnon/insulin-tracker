@@ -174,9 +174,9 @@ struct TrendsView: View {
     private var glucosePanel: some View {
         panel("Average glucose",
               unit: glucoseUnit,
-              readout: readout({ $0.meanGlucose }, { InsulinStats.formatGlucose($0, unit: glucoseUnit) }),
-              tint: Self.glucose,
-              highlight: selectedDay.flatMap({ $0.meanGlucose })) {
+              value: { $0.meanGlucose },
+              format: { InsulinStats.formatGlucose($0, unit: glucoseUnit) },
+              tint: Self.glucose) {
             ForEach(points({ $0.meanGlucose })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Glucose", point.value))
                     .foregroundStyle(Self.glucose)
@@ -192,8 +192,10 @@ struct TrendsView: View {
     private var insulinPanel: some View {
         panel("Total insulin",
               unit: "U",
-              readout: readout({ $0.totalInsulin }, { InsulinStats.formatUnits($0) }),
-              tint: Self.bolus) {
+              value: { $0.totalInsulin },
+              format: { InsulinStats.formatUnits($0) },
+              tint: Self.bolus,
+              marksPoint: false) {
             ForEach(insulinBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
                         y: .value("Units", bar.units))
@@ -210,9 +212,9 @@ struct TrendsView: View {
     private var ratioPanel: some View {
         panel("Insulin ÷ glucose",
               unit: "U/day per \(glucoseUnit)",
-              readout: readout({ $0.insulinPerGlucose }, { InsulinStats.formatIndex($0, unit: glucoseUnit) }),
-              tint: Self.index,
-              highlight: selectedDay.flatMap({ $0.insulinPerGlucose })) {
+              value: { $0.insulinPerGlucose },
+              format: { InsulinStats.formatIndex($0, unit: glucoseUnit) },
+              tint: Self.index) {
             ForEach(points({ $0.insulinPerGlucose })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Index", point.value))
                     .foregroundStyle(Self.index)
@@ -228,8 +230,10 @@ struct TrendsView: View {
     private var energyPanel: some View {
         panel("Exercise calories",
               unit: "kcal",
-              readout: readout({ $0.activeEnergy }, { String(Int($0.rounded())) }),
-              tint: Self.workout) {
+              value: { $0.activeEnergy },
+              format: { String(Int($0.rounded())) },
+              tint: Self.workout,
+              marksPoint: false) {
             ForEach(energyBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
                         y: .value("kcal", bar.kilocalories))
@@ -252,10 +256,10 @@ struct TrendsView: View {
     private var weightPanel: some View {
         panel("Weight",
               unit: weightUnit,
-              readout: readout({ $0.weight }, { String(format: "%.1f", $0) }),
+              value: { $0.weight },
+              format: { String(format: "%.1f", $0) },
               yDomain: weightDomain,
-              tint: Self.weight,
-              highlight: selectedDay.flatMap({ $0.weight })) {
+              tint: Self.weight) {
             ForEach(points({ $0.weight })) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Weight", point.value))
                     .foregroundStyle(Self.weight)
@@ -281,9 +285,9 @@ struct TrendsView: View {
     private var a1cPanel: some View {
         panel("Estimated A1c",
               unit: "% · ADAG",
-              readout: readout(a1c, A1c.format),
-              tint: Self.a1cTint,
-              highlight: selectedDay.flatMap(a1c)) {
+              value: a1c,
+              format: A1c.format,
+              tint: Self.a1cTint) {
             ForEach(points(a1c)) { point in
                 LineMark(x: .value("Day", point.date), y: .value("A1c", point.value))
                     .foregroundStyle(Self.a1cTint)
@@ -301,19 +305,50 @@ struct TrendsView: View {
 
     // MARK: - Panel chrome
 
-    /// Title, a readout, and a chart that scrolls, zooms and selects in step
+    /// Title, two readouts, and a chart that scrolls, zooms and selects in step
     /// with every other one.
+    ///
+    /// One accessor drives all four uses of a series — the header value, the
+    /// ninety-day average above it, the reference line at that average, and the
+    /// point marking a selected day — so they cannot drift out of agreement
+    /// with the marks the caller draws.
     private func panel<Content: ChartContent>(
         _ title: String,
         unit: String,
-        readout: String?,
+        value: (DailySeries.Day) -> Double?,
+        format: (Double) -> String,
         yDomain: ClosedRange<Double>? = nil,
         tint: Color,
-        highlight: Double? = nil,
+        marksPoint: Bool = true,
         @ChartContentBuilder content: () -> Content
     ) -> some View {
+        // Selected day if there is one, newest value otherwise. A selected day
+        // with nothing to show stays nil, which the header draws as a dash —
+        // falling back to the latest value would answer a question about one
+        // day with a number from another.
+        var current: Double?
+        if let selectedDay {
+            current = value(selectedDay)
+        } else {
+            for day in days.reversed() {
+                if let found = value(day) {
+                    current = found
+                    break
+                }
+            }
+        }
+        let mean = average(value)
+        let highlight: Double? = marksPoint ? selectedDay.flatMap(value) : nil
+
         let chart = Chart {
             content()
+
+            if let mean {
+                RuleMark(y: .value("90-day average", mean))
+                    .foregroundStyle(tint.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+            }
+
             if let selectedDay {
                 RuleMark(x: .value("Day", plotX(selectedDay)))
                     .foregroundStyle(Self.rule)
@@ -355,21 +390,36 @@ struct TrendsView: View {
         .frame(height: 92)
 
         return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 4)
-                Text(readout ?? "—")
+                if let mean {
+                    Text("90 d")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                    Text(format(mean))
+                        .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(current.map(format) ?? "—")
                     .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(readout == nil ? Color.secondary : Color.primary)
+                    .foregroundStyle(current == nil ? Color.secondary : Color.primary)
                 Text(unit)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            // Six panels of two numbers and a unit on one line: shrink rather
+            // than truncate, so "U/day per mmol/L" stays readable.
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
 
             // Applied here rather than always, because handing Charts an
             // explicit domain everywhere would throw away the automatic scaling
-            // the other four want.
+            // the other five want.
             if let yDomain {
                 chart.chartYScale(domain: yDomain)
             } else {
@@ -427,20 +477,18 @@ struct TrendsView: View {
         }
     }
 
-    /// The selected day's value, or the newest one when nothing is selected.
+    /// Mean of a series over everything plotted.
     ///
-    /// A selected day with nothing to show returns nil, which the header draws
-    /// as a dash — showing the latest value instead would quietly answer a
-    /// question about one day with a number from another.
-    private func readout(_ value: (DailySeries.Day) -> Double?,
-                         _ format: (Double) -> String) -> String? {
-        if let selectedDay {
-            return value(selectedDay).map(format)
-        }
-        for day in days.reversed() {
-            if let found = value(day) { return format(found) }
-        }
-        return nil
+    /// The mean of the *days shown*, so a day with nothing logged neither
+    /// raises nor lowers it. That makes the line sit exactly at the average of
+    /// the points above and below it, which is the only reading of a reference
+    /// line on a chart that cannot mislead — but it is why this can differ from
+    /// the ninety-day figure on the Averages card, which divides by elapsed
+    /// time instead.
+    private func average(_ value: (DailySeries.Day) -> Double?) -> Double? {
+        let values = days.compactMap(value)
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0.0, +) / Double(values.count)
     }
 
     private struct StackedBar: Identifiable {
@@ -508,6 +556,8 @@ struct TrendsView: View {
 
         notes.append("Weight is scaled to its own range plus three kilograms either side, so a small real drift is a visible slope. The other four start at zero.")
         notes.append("Exercise calories are active energy from Health, with the part spent inside a logged workout drawn darker. Weight is plotted only on days it was actually recorded; the line between dots is interpolation.")
+        notes.append("Each chart carries its 90-day average as a dashed line and as the muted figure beside its title. It is the mean of the days plotted, so a day with nothing logged neither raises nor lowers it — which is why it can differ slightly from the same window on the Averages card, which divides by elapsed time instead.")
+        notes.append("On the A1c chart that average is worth more than the daily points: the ADAG formula is linear, so the mean of the daily estimates equals the estimate from the 90-day mean glucose exactly. That dashed line is the closest thing here to a real A1c.")
         notes.append("Estimated A1c is that day's mean glucose through the ADAG formula — if every day looked like that one, the A1c would be this. It is the same curve as the glucose chart in different units, and it is not a prediction of a lab result: a real A1c answers for the previous three months, weighted towards the recent end. Read the level, not the point.")
         notes.append("The index is total daily insulin per unit of glucose: it rises as sensitivity falls. A single day of it is noisy — one late dinner moves it. Read the shape over weeks, not the day-to-day.")
         return notes

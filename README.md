@@ -359,7 +359,13 @@ Three pieces of state are shared by every chart, which is the whole trick:
 - **tap** to pick a day — a dashed rule lands on it in all six charts, and each
   one's readout switches from its latest value to that day's.
 
-All six follow, so a day stays lined up down the screen. A selected day with
+All six follow, so a day stays lined up down the screen.
+
+Every chart also carries its **90-day average**, as a dashed line across the plot
+and as a muted figure beside its title. It is the mean of the days plotted, so a
+day with nothing logged neither raises nor lowers it — which is why it can differ
+slightly from the same window on the **Averages** card, which divides by elapsed
+time instead. A selected day with
 nothing to show reads as a dash rather than falling back to the latest value,
 which would answer a question about one day with a number from another.
 
@@ -439,6 +445,11 @@ sit off it — red-cell lifespan varies, so the same mean glucose genuinely give
 different people different A1cs. And CGM software more often reports **GMI**
 (Bergenstal, 2018), a different fit over a fourteen-day window, which is why an
 app's number and this one can disagree by a few tenths.
+
+On this chart the dashed 90-day average is worth more than the daily points.
+The ADAG formula is affine, so the mean of the daily estimates equals the
+estimate from the 90-day mean glucose **exactly** — that line is the closest
+thing the app produces to a real A1c, and it comes free from plotting the days.
 
 `A1c.millimolesPerMole` converts to the IFCC form for labs that report mmol/mol.
 
