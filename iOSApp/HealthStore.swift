@@ -88,12 +88,17 @@ final class HealthStore: ObservableObject {
     private static let minimumRefreshInterval: TimeInterval = 5 * 60
     private var lastRefresh: Date?
 
-    /// Pull both series covering `since`. Failures leave the previous values
-    /// in place rather than blanking the UI.
+    /// Pull both series. Failures leave the previous values in place rather
+    /// than blanking the UI.
+    ///
+    /// The two windows are separate because the two series are wanted for
+    /// different spans: the long-run averages need three months of glucose,
+    /// while workouts are only ever read back as far as the carb ratio looks,
+    /// and widening them would quietly lengthen the history list too.
     ///
     /// - Parameter force: bypass the interval — used on first appearance, where
     ///   waiting five minutes for anything to show would be absurd.
-    func refresh(since: Date, force: Bool = false) async {
+    func refresh(glucoseSince: Date, workoutsSince: Date, force: Bool = false) async {
         guard Self.isAvailable else { return }
         if !force,
            let last = lastRefresh,
@@ -101,8 +106,8 @@ final class HealthStore: ObservableObject {
             return
         }
         lastRefresh = .now
-        async let w = fetchWorkouts(since: since)
-        async let g = fetchGlucose(since: since)
+        async let w = fetchWorkouts(since: workoutsSince)
+        async let g = fetchGlucose(since: glucoseSince)
         let (fetchedWorkouts, fetchedGlucose) = await (w, g)
         if let fetchedWorkouts { workouts = fetchedWorkouts }
         if let fetchedGlucose { glucose = fetchedGlucose }
@@ -134,10 +139,10 @@ final class HealthStore: ObservableObject {
         let descriptor = HKSampleQueryDescriptor(
             predicates: [predicate],
             sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
-            // Four weeks of CGM at five-minute intervals is ~8,000 samples;
+            // Ninety days of CGM at five-minute intervals is ~26,000 samples;
             // leave headroom rather than silently truncating the oldest days,
-            // which are exactly the ones the carb ratio needs.
-            limit: 20000
+            // which are exactly the ones the long windows are made of.
+            limit: 40000
         )
         guard let samples = try? await descriptor.result(for: store) else { return nil }
         let unit = glucoseUnit

@@ -36,7 +36,8 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
-                   + InsulinMath (IOB / activity curve) + SharedStore (App Group)
+                   + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
+                   + SharedStore (App Group)
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: read-only history list
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
@@ -291,6 +292,58 @@ no gram figure and are never assigned a guessed one.
 > distorts that meal — it looks like the meal ran high, so the ratio reads
 > tighter than it is. The median across meals limits the damage; it does not
 > eliminate it.
+
+> This describes what already happened. It is not a dose recommendation.
+
+## Averages
+
+Glucose and insulin over **3, 7, 30 and 90 days**, side by side, so a change in
+sensitivity shows up as a column that no longer matches the ones beside it.
+
+Six rows, one column per window:
+
+| Row | What it is |
+|---|---|
+| **Glucose** | mean of the CGM readings in the window |
+| **SD** | sample standard deviation (n − 1) of the same readings |
+| **Basal** | long-acting units per day |
+| **Bolus** | rapid-acting units per day |
+| **Total** | the two added |
+| **Insulin ÷ glucose** | total daily units per unit of glucose |
+
+Every window **ends at the newest glucose reading**, not at the clock. Dexcom
+uploads to Health in batches, so "now" is routinely an hour ahead of the last
+sample, and anchoring on the clock would leave each window with a ragged empty
+tail that moves the averages for no reason.
+
+The bottom row is the point of it: **what a given glucose level costs in
+insulin**. Holding diet roughly constant, it rises when the same result takes
+more units — so it goes **up as sensitivity goes down**. It is a resistance
+index, not a sensitivity one. Its size also depends on whether Health is set to
+mmol/L or mg/dL, so it compares across your own windows and across time, never
+against anyone else's number.
+
+Per-day figures are divided by **elapsed time**, not by a count of days with
+entries. A window ends mid-afternoon: it holds the tail of its first day and the
+head of its last, which together make one day but touch two, and counting dates
+would divide three days of doses by four of them.
+
+Anything that makes a column mean less than it looks like it means is said on
+the card rather than left to be noticed:
+
+- **The log is shorter than the window.** Per-day figures are divided by how far
+  it actually reaches, so a fortnight of logging does not read as a third of the
+  insulin in the 90-day column. Those windows say how many days they have.
+- **The CGM was offline.** Coverage is measured from the gaps between readings
+  rather than from an assumed sample rate, so a warm-up or a lost transmitter
+  reads as missing time. Below 80% the card says so — a mean over a third of a
+  window is a mean of that third.
+- **Days with no basal on them.** A missed log and a missed injection are
+  indistinguishable from here, and either way those days divide the average
+  without contributing to it. Five forgotten days in thirty take a sixth off the
+  total and off the index with it, which is the largest error here in practice.
+- **No basal at all.** Basal is usually the larger half of the day, so this does
+  not make the total slightly low — it makes it wrong.
 
 > This describes what already happened. It is not a dose recommendation.
 

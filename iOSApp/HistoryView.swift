@@ -21,12 +21,29 @@ struct HistoryView: View {
     /// stays the source of truth for both.
     @StateObject private var health = HealthStore()
 
-    /// How far back Health is queried.
+    /// How far back glucose is queried.
     ///
-    /// Driven by the carb-ratio window, not the chart's: the chart needs eight
-    /// hours, but every meal in the last seven days needs glucose either side
-    /// of it to be usable as evidence.
-    private var healthWindow: Date { now.addingTimeInterval(-CarbRatio.window) }
+    /// Driven by the longest averaging window, not the chart's: the chart needs
+    /// eight hours, the carb ratio four weeks, and the long-run averages three
+    /// months.
+    private var glucoseWindow: Date { now.addingTimeInterval(-InsulinStats.longestWindow) }
+
+    /// How far back workouts are queried — only as far as the carb ratio looks
+    /// at them. Reading three months of them would lengthen the history list
+    /// as a side effect of a statistic that never uses them.
+    private var workoutWindow: Date { now.addingTimeInterval(-CarbRatio.window) }
+
+    /// Glucose from the carb-ratio window only.
+    ///
+    /// `CarbRatio` sorts whatever it is handed, and it only ever looks at meals
+    /// from the last four weeks — so handing it three months of readings would
+    /// sort tens of thousands of points every tick to reach the same answer.
+    private var carbRatioGlucose: [CarbRatio.GlucosePoint] {
+        let since = now.addingTimeInterval(-CarbRatio.window)
+        return health.glucose
+            .filter { $0.date > since }
+            .map { .init(date: $0.date, value: $0.value) }
+    }
 
     /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
     /// its action profile isn't described by this curve.
@@ -59,9 +76,32 @@ struct HistoryView: View {
 
         return CarbRatio.estimate(
             events: events,
-            glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
+            glucose: carbRatioGlucose,
             exclusions: health.workouts.map { .init(start: $0.start, end: $0.end) },
             now: now
+        )
+    }
+
+    /// Glucose and insulin averaged over 3, 7, 30 and 90 days.
+    ///
+    /// Only injections feed this — carbs and meal sizes say nothing about how
+    /// much insulin a day took. Unlike the other readouts it does not depend on
+    /// `now`: every window ends at the newest glucose reading instead, so the
+    /// minute ticker does not recompute it.
+    private var insulinStats: InsulinStats.Summary {
+        let doses: [InsulinStats.Dose] = entries.compactMap { entry in
+            switch entry.kind {
+            case .insulin:
+                return InsulinStats.Dose(date: entry.timestamp, units: entry.amount, isBasal: false)
+            case .basal:
+                return InsulinStats.Dose(date: entry.timestamp, units: entry.amount, isBasal: true)
+            case .carbs, .meal: return nil
+            }
+        }
+
+        return InsulinStats.summarise(
+            glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
+            doses: doses
         )
     }
 
@@ -107,6 +147,11 @@ struct HistoryView: View {
                         Section("Carb ratio · last 28 days") {
                             CarbRatioCard(estimate: carbRatio,
                                           glucoseUnit: health.glucoseUnitLabel)
+                        }
+
+                        Section("Averages") {
+                            InsulinStatsCard(summary: insulinStats,
+                                             glucoseUnit: health.glucoseUnitLabel)
                         }
 
                         ForEach(groupedByDay, id: \.day) { group in
@@ -156,11 +201,16 @@ struct HistoryView: View {
             }
             .onReceive(ticker) { instant in
                 now = instant
-                Task { await health.refresh(since: healthWindow) }
+                Task {
+                    await health.refresh(glucoseSince: glucoseWindow,
+                                         workoutsSince: workoutWindow)
+                }
             }
             .task {
                 await health.requestAccess()
-                await health.refresh(since: healthWindow, force: true)
+                await health.refresh(glucoseSince: glucoseWindow,
+                                     workoutsSince: workoutWindow,
+                                     force: true)
             }
         }
     }
