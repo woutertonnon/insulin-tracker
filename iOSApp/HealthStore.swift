@@ -20,6 +20,9 @@ final class HealthStore: ObservableObject {
         let start: Date
         let end: Date
         let name: String
+        /// Active energy Health attributes to this workout, in kcal. Nil when
+        /// the workout was recorded without it — a manually added entry, say.
+        let kilocalories: Double?
 
         var duration: TimeInterval { end.timeIntervalSince(start) }
 
@@ -38,19 +41,41 @@ final class HealthStore: ObservableObject {
         let value: Double
     }
 
+    struct DailyEnergy: Identifiable, Hashable {
+        let day: Date
+        let kilocalories: Double
+        var id: Date { day }
+    }
+
+    struct WeightSample: Identifiable, Hashable {
+        let id: UUID
+        let date: Date
+        /// In whatever unit Health is set to — see `weightUnitLabel`.
+        let value: Double
+    }
+
     @Published private(set) var workouts: [Workout] = []
     @Published private(set) var glucose: [GlucoseSample] = []
+    /// Active energy per calendar day, summed by Health rather than by us.
+    @Published private(set) var dailyEnergy: [DailyEnergy] = []
+    @Published private(set) var weights: [WeightSample] = []
     /// Follows the unit chosen in Health, so mmol/L and mg/dL both read right
     /// without a setting of our own.
     @Published private(set) var glucoseUnitLabel = "mmol/L"
+    /// Follows the unit chosen in Health, so kilograms and pounds both read
+    /// right without a setting of our own.
+    @Published private(set) var weightUnitLabel = "kg"
     @Published private(set) var didRequestAccess = false
 
     static var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     private let store = HKHealthStore()
     private var glucoseUnit = HKUnit(from: "mmol/L")
+    private var weightUnit = HKUnit.gramUnit(with: .kilo)
 
     private var glucoseType: HKQuantityType { HKQuantityType(.bloodGlucose) }
+    private var energyType: HKQuantityType { HKQuantityType(.activeEnergyBurned) }
+    private var weightType: HKQuantityType { HKQuantityType(.bodyMass) }
 
     /// Ask once for read access to workouts and glucose.
     ///
@@ -60,7 +85,10 @@ final class HealthStore: ObservableObject {
     /// state to show; empty results are handled the same way either way.
     func requestAccess() async {
         guard Self.isAvailable else { return }
-        let read: Set<HKObjectType> = [HKObjectType.workoutType(), glucoseType]
+        let read: Set<HKObjectType> = [HKObjectType.workoutType(),
+                                       glucoseType,
+                                       energyType,
+                                       weightType]
         do {
             try await store.requestAuthorization(toShare: [], read: read)
             didRequestAccess = true
@@ -73,10 +101,15 @@ final class HealthStore: ObservableObject {
     private func refreshUnit() async {
         // Split rather than subscripting the awaited call directly: `try?` would
         // wrap the whole expression, leaving a doubly-optional result.
-        let units = try? await store.preferredUnits(for: [glucoseType])
-        guard let unit = units?[glucoseType] else { return }
-        glucoseUnit = unit
-        glucoseUnitLabel = unit.unitString
+        let units = try? await store.preferredUnits(for: [glucoseType, weightType])
+        if let unit = units?[glucoseType] {
+            glucoseUnit = unit
+            glucoseUnitLabel = unit.unitString
+        }
+        if let unit = units?[weightType] {
+            weightUnit = unit
+            weightUnitLabel = unit.unitString
+        }
     }
 
     /// Least time between Health queries.
@@ -88,17 +121,18 @@ final class HealthStore: ObservableObject {
     private static let minimumRefreshInterval: TimeInterval = 5 * 60
     private var lastRefresh: Date?
 
-    /// Pull both series. Failures leave the previous values in place rather
-    /// than blanking the UI.
+    /// Pull all four series over one window. Failures leave the previous values
+    /// in place rather than blanking the UI.
     ///
-    /// The two windows are separate because the two series are wanted for
-    /// different spans: the long-run averages need three months of glucose,
-    /// while workouts are only ever read back as far as the carb ratio looks,
-    /// and widening them would quietly lengthen the history list too.
+    /// One window rather than one per series: the trends view plots all four
+    /// day by day against each other, so a shorter span on any of them would
+    /// leave a chart that stops early and reads as an absence of data rather
+    /// than an absence of query. Consumers that want less filter at the point
+    /// of use.
     ///
     /// - Parameter force: bypass the interval — used on first appearance, where
     ///   waiting five minutes for anything to show would be absurd.
-    func refresh(glucoseSince: Date, workoutsSince: Date, force: Bool = false) async {
+    func refresh(since: Date, force: Bool = false) async {
         guard Self.isAvailable else { return }
         if !force,
            let last = lastRefresh,
@@ -106,11 +140,15 @@ final class HealthStore: ObservableObject {
             return
         }
         lastRefresh = .now
-        async let w = fetchWorkouts(since: workoutsSince)
-        async let g = fetchGlucose(since: glucoseSince)
-        let (fetchedWorkouts, fetchedGlucose) = await (w, g)
+        async let w = fetchWorkouts(since: since)
+        async let g = fetchGlucose(since: since)
+        async let e = fetchDailyEnergy(since: since)
+        async let m = fetchWeights(since: since)
+        let (fetchedWorkouts, fetchedGlucose, fetchedEnergy, fetchedWeights) = await (w, g, e, m)
         if let fetchedWorkouts { workouts = fetchedWorkouts }
         if let fetchedGlucose { glucose = fetchedGlucose }
+        if let fetchedEnergy { dailyEnergy = fetchedEnergy }
+        if let fetchedWeights { weights = fetchedWeights }
     }
 
     private func fetchWorkouts(since: Date) async -> [Workout]? {
@@ -120,14 +158,20 @@ final class HealthStore: ObservableObject {
         let descriptor = HKSampleQueryDescriptor(
             predicates: [predicate],
             sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)],
-            limit: 100
+            // Three months of daily training, with headroom. The newest are
+            // kept, so a very heavy log loses its oldest days rather than its
+            // most recent ones.
+            limit: 500
         )
         guard let samples = try? await descriptor.result(for: store) else { return nil }
         return samples.map {
             Workout(id: $0.uuid,
                     start: $0.startDate,
                     end: $0.endDate,
-                    name: Self.name(for: $0.workoutActivityType))
+                    name: Self.name(for: $0.workoutActivityType),
+                    kilocalories: $0.statistics(for: HKQuantityType(.activeEnergyBurned))?
+                        .sumQuantity()?
+                        .doubleValue(for: .kilocalorie()))
         }
     }
 
@@ -150,6 +194,54 @@ final class HealthStore: ObservableObject {
             GlucoseSample(id: $0.uuid,
                           date: $0.startDate,
                           value: $0.quantity.doubleValue(for: unit))
+        }
+    }
+
+    /// Active energy per calendar day.
+    ///
+    /// Summed by Health with a statistics collection rather than by pulling
+    /// every sample and adding them up here: the watch writes active energy in
+    /// small, frequent increments, so three months of raw samples runs to tens
+    /// of thousands of rows to produce ninety numbers.
+    private func fetchDailyEnergy(since: Date) async -> [DailyEnergy]? {
+        let calendar = Calendar.current
+        let anchor = calendar.startOfDay(for: since)
+        let predicate = HKSamplePredicate.quantitySample(
+            type: energyType,
+            predicate: HKQuery.predicateForSamples(withStart: anchor, end: nil, options: .strictStartDate)
+        )
+        let descriptor = HKStatisticsCollectionQueryDescriptor(
+            predicate: predicate,
+            options: .cumulativeSum,
+            anchorDate: anchor,
+            intervalComponents: DateComponents(day: 1)
+        )
+        guard let collection = try? await descriptor.result(for: store) else { return nil }
+        return collection.statistics().compactMap { statistic in
+            guard let sum = statistic.sumQuantity() else { return nil }
+            return DailyEnergy(day: calendar.startOfDay(for: statistic.startDate),
+                               kilocalories: sum.doubleValue(for: .kilocalorie()))
+        }
+    }
+
+    /// Every weight reading in the window. Not one per day — people weigh
+    /// themselves when they remember to, and the gaps are the honest picture.
+    private func fetchWeights(since: Date) async -> [WeightSample]? {
+        let predicate = HKSamplePredicate.quantitySample(
+            type: weightType,
+            predicate: HKQuery.predicateForSamples(withStart: since, end: nil, options: .strictStartDate)
+        )
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [predicate],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .forward)],
+            limit: 2000
+        )
+        guard let samples = try? await descriptor.result(for: store) else { return nil }
+        let unit = weightUnit
+        return samples.map {
+            WeightSample(id: $0.uuid,
+                         date: $0.startDate,
+                         value: $0.quantity.doubleValue(for: unit))
         }
     }
 

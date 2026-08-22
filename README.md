@@ -37,7 +37,7 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
                    + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
-                   + SharedStore (App Group)
+                   + DailySeries + SharedStore (App Group)
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: read-only history list
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
@@ -347,15 +347,69 @@ the card rather than left to be noticed:
 
 > This describes what already happened. It is not a dose recommendation.
 
+## Trends
+
+Five charts stacked on one shared time axis, day by day over three months.
+Drag any of them and all five scroll together, so a day lines up down the
+screen. Reached from the chart button in the history toolbar.
+
+| Chart | |
+|---|---|
+| **Average glucose** | mean of that day's CGM readings |
+| **Total insulin** | units, with basal and bolus drawn as separate parts of the bar |
+| **Insulin ÷ glucose** | that day's total insulin per unit of glucose |
+| **Exercise calories** | active energy from Health, with the workout part drawn darker |
+| **Weight** | plotted only on days it was actually recorded |
+
+Stacked rather than overlaid: the five share no scale, and small multiples on a
+common axis are the honest way to read one against another. A training block and
+the notch it puts in insulin a day later line up vertically without pretending
+kilocalories and millimoles belong on the same y-axis.
+
+This is the counterpart to **Averages**, not a duplicate of it. That one smooths
+a trend out of the noise; this one keeps every day intact so the noise is
+visible. A day the basal never got logged should show up as a notch here, not be
+quietly folded into a thirty-day mean.
+
+**Exercise calories are active energy, not workout energy.** The book counts
+"cleaning, shopping, playing, yard work, sex, and anything else that has us
+using our muscles" as physical activity, and all of it moves insulin
+sensitivity — so the bar is the whole day's movement, with the part spent inside
+a logged workout drawn darker. Deliberate training and everything else, without
+having to choose between them. To plot workouts only, use the darker series
+alone in `iOSApp/TrendsView.swift`.
+
+Two rules keep a chart from claiming more than it knows:
+
+- **A day needs CGM for at least half of it** before its average is plotted.
+  Glucose has a strong daily shape, so a mean over a third of a day is not a
+  noisy version of that day's average — it is an average of whichever third the
+  sensor was awake for, which is a different quantity.
+- **Weight is drawn with dots as well as a line.** People weigh themselves when
+  they remember to, and the line between two readings a week apart is
+  interpolation, not measurement. The dots say which days were actually stood on.
+
+Day length is asked of the calendar rather than assumed to be 86,400 seconds, so
+the twenty-five-hour and twenty-three-hour days at each clock change are not
+scored as short of readings.
+
+> A single day of the index is noisy — one late dinner moves it. It is there to
+> be read as a shape over weeks, not day to day.
+
 ## Apple Health
 
-The iPhone app reads two things from Health, and writes nothing back:
+The iPhone app reads four things from Health, and writes nothing back:
 
 - **Workouts** — shown in the history list, and drawn as shaded bands behind the
   insulin activity chart so you can see where exercise overlapped insulin that
   was still working.
 - **Glucose** — written to Health by the Dexcom G7 app, shown as its own card
   with the latest reading and a trend line.
+- **Active energy** — the day's movement, charted in **Trends**. Read as a daily
+  statistics collection rather than as raw samples: the watch writes energy in
+  small, frequent increments, so three months of them is tens of thousands of
+  rows to produce ninety numbers.
+- **Body mass** — charted in **Trends**, in whatever unit Health is set to.
 
 Neither is copied into SwiftData. Health stays the source of truth, which avoids
 reconciling against samples the Fitness or Dexcom apps may revise later.

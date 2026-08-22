@@ -21,17 +21,12 @@ struct HistoryView: View {
     /// stays the source of truth for both.
     @StateObject private var health = HealthStore()
 
-    /// How far back glucose is queried.
+    /// How far back Health is queried.
     ///
     /// Driven by the longest averaging window, not the chart's: the chart needs
-    /// eight hours, the carb ratio four weeks, and the long-run averages three
-    /// months.
-    private var glucoseWindow: Date { now.addingTimeInterval(-InsulinStats.longestWindow) }
-
-    /// How far back workouts are queried — only as far as the carb ratio looks
-    /// at them. Reading three months of them would lengthen the history list
-    /// as a side effect of a statistic that never uses them.
-    private var workoutWindow: Date { now.addingTimeInterval(-CarbRatio.window) }
+    /// eight hours, the carb ratio four weeks, and the long-run averages and
+    /// the trends charts three months.
+    private var healthWindow: Date { now.addingTimeInterval(-InsulinStats.longestWindow) }
 
     /// Glucose from the carb-ratio window only.
     ///
@@ -102,6 +97,37 @@ struct HistoryView: View {
         return InsulinStats.summarise(
             glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
             doses: doses
+        )
+    }
+
+    /// One row per calendar day for the trends charts, over the same three
+    /// months Health is queried for.
+    private var dailySeries: [DailySeries.Day] {
+        guard let anchor = health.latestGlucose?.date else { return [] }
+
+        let doses: [DailySeries.Dose] = entries.compactMap { entry in
+            switch entry.kind {
+            case .insulin:
+                return DailySeries.Dose(date: entry.timestamp, units: entry.amount, isBasal: false)
+            case .basal:
+                return DailySeries.Dose(date: entry.timestamp, units: entry.amount, isBasal: true)
+            case .carbs, .meal:
+                return nil
+            }
+        }
+
+        return DailySeries.build(
+            dayCount: Int(InsulinStats.longestWindow / (24 * 3600)),
+            endingAt: anchor,
+            glucose: health.glucose.map { .init(date: $0.date, value: $0.value) },
+            doses: doses,
+            energy: health.dailyEnergy.map { .init(day: $0.day, kilocalories: $0.kilocalories) },
+            workouts: health.workouts.compactMap { workout in
+                workout.kilocalories.map {
+                    DailySeries.WorkoutEnergy(date: workout.start, kilocalories: $0)
+                }
+            },
+            weights: health.weights.map { .init(date: $0.date, value: $0.value) }
         )
     }
 
@@ -185,12 +211,29 @@ struct HistoryView: View {
             }
             .navigationTitle("History")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    // Value-based, not a destination closure: SwiftUI builds a
+                    // `NavigationLink(destination:)` eagerly, which would run
+                    // the ninety-day bucketing on every tick of the minute
+                    // ticker whether or not anyone opened the charts.
+                    NavigationLink(value: Destination.trends) {
+                        Image(systemName: "chart.xyaxis.line")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         addingNew = true
                     } label: {
                         Image(systemName: "plus")
                     }
+                }
+            }
+            .navigationDestination(for: Destination.self) { destination in
+                switch destination {
+                case .trends:
+                    TrendsView(days: dailySeries,
+                               glucoseUnit: health.glucoseUnitLabel,
+                               weightUnit: health.weightUnitLabel)
                 }
             }
             .sheet(item: $editingEntry) { entry in
@@ -201,16 +244,11 @@ struct HistoryView: View {
             }
             .onReceive(ticker) { instant in
                 now = instant
-                Task {
-                    await health.refresh(glucoseSince: glucoseWindow,
-                                         workoutsSince: workoutWindow)
-                }
+                Task { await health.refresh(since: healthWindow) }
             }
             .task {
                 await health.requestAccess()
-                await health.refresh(glucoseSince: glucoseWindow,
-                                     workoutsSince: workoutWindow,
-                                     force: true)
+                await health.refresh(since: healthWindow, force: true)
             }
         }
     }
@@ -222,6 +260,12 @@ struct HistoryView: View {
         // Tell the watch, so its store — and the complication's IOB — drop it too.
         ConnectivityManager.shared.sendDelete(id: id)
         ConnectivityManager.shared.pushBolusSnapshot()
+    }
+
+    /// Screens reachable from here. An enum rather than a bare marker so the
+    /// next one is a case, not a second mechanism.
+    private enum Destination: Hashable {
+        case trends
     }
 
     /// A row in the history: something logged here, or a workout read from
@@ -254,7 +298,14 @@ struct HistoryView: View {
 
     private var groupedByDay: [DayGroup] {
         let cal = Calendar.current
-        let items = entries.map(HistoryItem.entry) + health.workouts.map(HistoryItem.workout)
+        // Health is queried three months back for the trends charts, but the
+        // list keeps the span it always had — three months of workout rows
+        // interleaved with the log would be a side effect of a chart, not a
+        // decision anyone made about this list.
+        let listedWorkouts = health.workouts.filter {
+            $0.start > now.addingTimeInterval(-CarbRatio.window)
+        }
+        let items = entries.map(HistoryItem.entry) + listedWorkouts.map(HistoryItem.workout)
         let grouped = Dictionary(grouping: items) { cal.startOfDay(for: $0.date) }
         return grouped.keys.sorted(by: >).map { day in
             DayGroup(day: day,
