@@ -10,22 +10,38 @@ import UIKit
 /// later line up vertically, without pretending kilocalories and millimoles
 /// belong on the same y.
 ///
-/// Scrolling is bound to one shared position, so dragging any chart moves all
-/// five and the columns stay aligned.
+/// Three pieces of state are shared by every chart, which is the whole trick —
+/// scroll position, zoom, and the selected day. Each chart reads all three, so
+/// dragging, pinching or tapping any one of them moves all five together and
+/// the columns stay aligned down the screen.
 ///
 /// Nothing here is a dosing instruction. It describes what already happened.
 struct TrendsView: View {
     let days: [DailySeries.Day]
     let glucoseUnit: String
     let weightUnit: String
+    /// Three kilograms in the unit weight is displayed in — the pad either side
+    /// of the weight range, so a two-kilo drift is a visible slope rather than
+    /// a flat line across an axis scaled to include zero.
+    let weightPadding: Double
 
-    /// Shared by every chart — this is what makes them scroll as one.
+    /// Shared by every chart: this is what makes them move as one.
     @State private var scrollX = Date.distantPast
+    @State private var visibleDays: Double = Self.defaultVisibleDays
+    @State private var selectedDate: Date?
+
+    /// `visibleDays` when the current pinch began, so the gesture scales from
+    /// where it started rather than compounding every frame.
+    @State private var zoomAnchor: Double?
     @State private var didPosition = false
 
-    /// How much of the range is on screen at once. Four weeks reads as a block
-    /// of training or a run of missed basal rather than as individual days.
-    private static let visibleDays = 28
+    /// Four weeks reads as a block of training or a run of missed basal rather
+    /// than as individual days.
+    private static let defaultVisibleDays: Double = 28
+    /// Closest zoom. Below about three days the charts are one bar wide.
+    private static let minimumVisibleDays: Double = 3
+
+    private static let secondsPerDay: TimeInterval = 24 * 3600
 
     var body: some View {
         Group {
@@ -36,7 +52,11 @@ struct TrendsView: View {
                     description: Text("Needs glucose in Health and some insulin logged.")
                 )
             } else {
-                charts
+                VStack(spacing: 0) {
+                    selectionHeader
+                    Divider()
+                    charts
+                }
             }
         }
         .navigationTitle("Trends")
@@ -56,23 +76,106 @@ struct TrendsView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+        // Simultaneous, not exclusive: the charts own the one-finger drag for
+        // scrolling, and this only ever sees the two-finger pinch.
+        .simultaneousGesture(zoom)
         .onAppear(perform: positionAtToday)
+    }
+
+    // MARK: - Selection
+
+    /// Always present, so the layout does not jump when a day is picked and the
+    /// gesture is discoverable before anyone tries it.
+    private var selectionHeader: some View {
+        HStack(spacing: 6) {
+            if let selectedDay {
+                Text(Self.dayFormatter.string(from: selectedDay.date))
+                    .font(.subheadline.weight(.semibold))
+                if selectedDay.isPartial {
+                    Text("· today, still running")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Button {
+                    selectedDate = nil
+                } label: {
+                    Text("Clear").font(.caption)
+                }
+            } else {
+                Image(systemName: "hand.tap")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Tap any chart to read every series on one day. Pinch to zoom.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(minHeight: 38)
+        .background(.bar)
+    }
+
+    /// The day under the tap. Charts hands back wherever on the axis the touch
+    /// landed, not a data point, so it is snapped to the day containing it.
+    private var selectedDay: DailySeries.Day? {
+        guard let selectedDate else { return nil }
+        let calendar = Calendar.current
+        return days.first { calendar.isDate($0.date, inSameDayAs: selectedDate) }
+    }
+
+    // MARK: - Zoom
+
+    private var zoom: some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                let base = zoomAnchor ?? visibleDays
+                zoomAnchor = base
+                setVisibleDays(base / max(Double(value.magnification), 0.01))
+            }
+            .onEnded { _ in zoomAnchor = nil }
+    }
+
+    /// Zoom about the middle of what is on screen. Changing the visible length
+    /// alone would pin the left edge and slide everything you were looking at
+    /// off to the right.
+    private func setVisibleDays(_ proposed: Double) {
+        let ceiling = max(Self.minimumVisibleDays, Double(days.count))
+        let clamped = min(max(proposed, Self.minimumVisibleDays), ceiling)
+        guard clamped != visibleDays else { return }
+
+        let midpoint = scrollX.addingTimeInterval(visibleDays * Self.secondsPerDay / 2)
+        visibleDays = clamped
+        scrollX = clampedScroll(midpoint.addingTimeInterval(-clamped * Self.secondsPerDay / 2))
+    }
+
+    /// Keep the leading edge inside the plotted range, so zooming out at the
+    /// end of the series does not leave the charts parked past their own data.
+    private func clampedScroll(_ proposed: Date) -> Date {
+        let latest = domain.upperBound.addingTimeInterval(-visibleLength)
+        if proposed < domain.lowerBound { return domain.lowerBound }
+        if proposed > latest { return max(domain.lowerBound, latest) }
+        return proposed
     }
 
     /// Start at the most recent day rather than three months ago.
     private func positionAtToday() {
-        guard !didPosition, let last = plottableDays.last?.date else { return }
+        guard !didPosition, days.last != nil else { return }
         didPosition = true
-        let calendar = Calendar.current
-        scrollX = calendar.date(byAdding: .day, value: -Self.visibleDays, to: last) ?? last
+        scrollX = clampedScroll(domain.upperBound.addingTimeInterval(-visibleLength))
     }
 
     // MARK: - The panels
 
     private var glucosePanel: some View {
-        panel("Average glucose", unit: glucoseUnit, latest: latest(\.meanGlucose).map {
-            InsulinStats.formatGlucose($0, unit: glucoseUnit)
-        }) {
+        panel("Average glucose",
+              unit: glucoseUnit,
+              readout: readout(\.meanGlucose, { InsulinStats.formatGlucose($0, unit: glucoseUnit) }),
+              tint: Self.glucose,
+              highlight: selectedDay?.meanGlucose ?? nil) {
             ForEach(points(\.meanGlucose)) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Glucose", point.value))
                     .foregroundStyle(Self.glucose)
@@ -86,9 +189,10 @@ struct TrendsView: View {
     /// habits, and a day the basal never got entered reads as a notch in the
     /// dark half rather than as a day of genuinely less insulin.
     private var insulinPanel: some View {
-        panel("Total insulin", unit: "U", latest: latest(\.totalInsulin).map {
-            InsulinStats.formatUnits($0)
-        }) {
+        panel("Total insulin",
+              unit: "U",
+              readout: readout(\.totalInsulin, { InsulinStats.formatUnits($0) }),
+              tint: Self.bolus) {
             ForEach(insulinBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
                         y: .value("Units", bar.units))
@@ -105,9 +209,9 @@ struct TrendsView: View {
     private var ratioPanel: some View {
         panel("Insulin ÷ glucose",
               unit: "U/day per \(glucoseUnit)",
-              latest: latest(\.insulinPerGlucose).map {
-                  InsulinStats.formatIndex($0, unit: glucoseUnit)
-              }) {
+              readout: readout(\.insulinPerGlucose, { InsulinStats.formatIndex($0, unit: glucoseUnit) }),
+              tint: Self.index,
+              highlight: selectedDay?.insulinPerGlucose ?? nil) {
             ForEach(points(\.insulinPerGlucose)) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Index", point.value))
                     .foregroundStyle(Self.index)
@@ -121,9 +225,10 @@ struct TrendsView: View {
     /// instead of it — the book counts cleaning and shopping as physical
     /// activity too, and both halves move insulin sensitivity.
     private var energyPanel: some View {
-        panel("Exercise calories", unit: "kcal", latest: latest(\.activeEnergy).map {
-            String(Int($0.rounded()))
-        }) {
+        panel("Exercise calories",
+              unit: "kcal",
+              readout: readout(\.activeEnergy, { String(Int($0.rounded())) }),
+              tint: Self.workout) {
             ForEach(energyBars) { bar in
                 BarMark(x: .value("Day", bar.date, unit: .day),
                         y: .value("kcal", bar.kilocalories))
@@ -137,13 +242,19 @@ struct TrendsView: View {
         .chartLegend(position: .top, alignment: .leading, spacing: 2)
     }
 
+    /// Scaled to its own range plus three kilograms either side, not to zero.
+    /// On a zero-based axis a fortnight of real change is a flat line.
+    ///
     /// Points as well as a line: weight is recorded when someone remembers to,
     /// and the line between two readings a week apart is interpolation, not
     /// measurement. The dots say which days were actually stood on.
     private var weightPanel: some View {
-        panel("Weight", unit: weightUnit, latest: latest(\.weight).map {
-            String(format: "%.1f", $0)
-        }) {
+        panel("Weight",
+              unit: weightUnit,
+              readout: readout(\.weight, { String(format: "%.1f", $0) }),
+              yDomain: weightDomain,
+              tint: Self.weight,
+              highlight: selectedDay?.weight ?? nil) {
             ForEach(points(\.weight)) { point in
                 LineMark(x: .value("Day", point.date), y: .value("Weight", point.value))
                     .foregroundStyle(Self.weight)
@@ -156,58 +267,88 @@ struct TrendsView: View {
         }
     }
 
+    private var weightDomain: ClosedRange<Double>? {
+        let values = days.compactMap(\.weight)
+        guard let low = values.min(), let high = values.max() else { return nil }
+        return (low - weightPadding)...(high + weightPadding)
+    }
+
     // MARK: - Panel chrome
 
-    /// Title, current value, and a chart that scrolls in step with every other.
+    /// Title, a readout, and a chart that scrolls, zooms and selects in step
+    /// with every other one.
     private func panel<Content: ChartContent>(
         _ title: String,
         unit: String,
-        latest: String?,
+        readout: String?,
+        yDomain: ClosedRange<Double>? = nil,
+        tint: Color,
+        highlight: Double? = nil,
         @ChartContentBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let chart = Chart {
+            content()
+            if let selectedDay {
+                RuleMark(x: .value("Day", plotX(selectedDay)))
+                    .foregroundStyle(Self.rule)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                if let highlight {
+                    PointMark(x: .value("Day", plotX(selectedDay)),
+                              y: .value(title, highlight))
+                        .foregroundStyle(tint)
+                        .symbolSize(60)
+                }
+            }
+        }
+        .chartXScale(domain: domain)
+        .chartXVisibleDomain(length: visibleLength)
+        .chartScrollableAxes(.horizontal)
+        .chartScrollPosition(x: $scrollX)
+        .chartXSelection(value: $selectedDate)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(Self.grid)
+                AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine().foregroundStyle(Self.grid)
+                AxisValueLabel {
+                    // Fixed width so every chart's plot area starts at the same
+                    // x — otherwise "1200" and "8.4" would offset the panels
+                    // from each other and the columns would no longer line up.
+                    Text(Self.axisLabel(value))
+                        .font(.system(size: 9))
+                        .frame(width: 30, alignment: .trailing)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(height: 92)
+
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 4)
-                if let latest {
-                    Text(latest)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.primary)
-                }
+                Text(readout ?? "—")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(readout == nil ? Color.secondary : Color.primary)
                 Text(unit)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            Chart(content: content)
-                .chartXScale(domain: domain)
-                .chartXVisibleDomain(length: visibleLength)
-                .chartScrollableAxes(.horizontal)
-                .chartScrollPosition(x: $scrollX)
-                .chartXAxis {
-                    AxisMarks(values: .stride(by: .weekOfYear)) { _ in
-                        AxisGridLine().foregroundStyle(Self.grid)
-                        AxisValueLabel(format: .dateTime.day().month(.abbreviated))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                        AxisGridLine().foregroundStyle(Self.grid)
-                        AxisValueLabel {
-                            // Fixed width so every chart's plot area starts at
-                            // the same x — otherwise "1200" and "8.4" would
-                            // offset the panels from each other and the columns
-                            // would no longer line up down the screen.
-                            Text(Self.axisLabel(value))
-                                .font(.system(size: 9))
-                                .frame(width: 30, alignment: .trailing)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .frame(height: 92)
+            // Applied here rather than always, because handing Charts an
+            // explicit domain everywhere would throw away the automatic scaling
+            // the other four want.
+            if let yDomain {
+                chart.chartYScale(domain: yDomain)
+            } else {
+                chart
+            }
         }
     }
 
@@ -220,7 +361,14 @@ struct TrendsView: View {
 
     // MARK: - Series
 
-    /// A day that has at least one thing worth plotting.
+    /// Marks sit at the middle of their day rather than at midnight, so bars,
+    /// lines and the selection rule all land on the same x. A bar binned by day
+    /// spans midnight to midnight; a line plotted at midnight would run through
+    /// its left edge, and the rule could only ever agree with one of them.
+    private func plotX(_ day: DailySeries.Day) -> Date {
+        Calendar.current.date(byAdding: .hour, value: 12, to: day.date) ?? day.date
+    }
+
     private var plottableDays: [DailySeries.Day] {
         days.filter {
             $0.meanGlucose != nil || $0.totalInsulin != nil
@@ -231,15 +379,13 @@ struct TrendsView: View {
     private var domain: ClosedRange<Date> {
         guard let first = days.first?.date, let last = days.last?.date, first < last else {
             let now = Date.now
-            return now.addingTimeInterval(-24 * 3600)...now
+            return now.addingTimeInterval(-Self.secondsPerDay)...now
         }
         // A day wide on the end, so the last bar is not clipped in half.
         return first...(Calendar.current.date(byAdding: .day, value: 1, to: last) ?? last)
     }
 
-    private var visibleLength: TimeInterval {
-        Double(Self.visibleDays) * 24 * 3600
-    }
+    private var visibleLength: TimeInterval { visibleDays * Self.secondsPerDay }
 
     private struct Point: Identifiable {
         let date: Date
@@ -249,14 +395,22 @@ struct TrendsView: View {
 
     private func points(_ metric: KeyPath<DailySeries.Day, Double?>) -> [Point] {
         days.compactMap { day in
-            day[keyPath: metric].map { Point(date: day.date, value: $0) }
+            day[keyPath: metric].map { Point(date: plotX(day), value: $0) }
         }
     }
 
-    /// Newest non-nil value of a metric, for the readout beside the title.
-    private func latest(_ metric: KeyPath<DailySeries.Day, Double?>) -> Double? {
+    /// The selected day's value, or the newest one when nothing is selected.
+    ///
+    /// A selected day with nothing to show returns nil, which the header draws
+    /// as a dash — showing the latest value instead would quietly answer a
+    /// question about one day with a number from another.
+    private func readout(_ metric: KeyPath<DailySeries.Day, Double?>,
+                         _ format: (Double) -> String) -> String? {
+        if let selectedDay {
+            return selectedDay[keyPath: metric].map(format)
+        }
         for day in days.reversed() {
-            if let value = day[keyPath: metric] { return value }
+            if let value = day[keyPath: metric] { return format(value) }
         }
         return nil
     }
@@ -272,8 +426,8 @@ struct TrendsView: View {
         days.flatMap { day -> [StackedBar] in
             guard day.hasInsulin else { return [] }
             return [
-                StackedBar(date: day.date, kind: "Basal", units: day.basal),
-                StackedBar(date: day.date, kind: "Bolus", units: day.bolus),
+                StackedBar(date: plotX(day), kind: "Basal", units: day.basal),
+                StackedBar(date: plotX(day), kind: "Bolus", units: day.bolus),
             ].filter { $0.units > 0 }
         }
     }
@@ -289,8 +443,8 @@ struct TrendsView: View {
         days.flatMap { day -> [EnergyBar] in
             guard day.activeEnergy != nil else { return [] }
             return [
-                EnergyBar(date: day.date, source: "Workouts", kilocalories: day.workoutEnergy),
-                EnergyBar(date: day.date, source: "Other activity", kilocalories: day.otherEnergy),
+                EnergyBar(date: plotX(day), source: "Workouts", kilocalories: day.workoutEnergy),
+                EnergyBar(date: plotX(day), source: "Other activity", kilocalories: day.otherEnergy),
             ].filter { $0.kilocalories > 0 }
         }
     }
@@ -311,7 +465,7 @@ struct TrendsView: View {
 
     private var notes: [String] {
         var notes = [
-            "Drag any chart — all five scroll together, so a day lines up down the screen.",
+            "Drag to scroll, pinch to zoom, tap to pick a day — all five charts follow, so a day lines up down the screen.",
         ]
 
         let thin = days.filter { $0.meanGlucose == nil && $0.glucoseCoverage > 0 }.count
@@ -324,10 +478,19 @@ struct TrendsView: View {
             notes.append("\(noBasal) day\(noBasal == 1 ? "" : "s") logged insulin but no basal. A missed log and a missed injection look the same from here, and both pull that day's total — and its index — down.")
         }
 
+        notes.append("Weight is scaled to its own range plus three kilograms either side, so a small real drift is a visible slope. The other four start at zero.")
         notes.append("Exercise calories are active energy from Health, with the part spent inside a logged workout drawn darker. Weight is plotted only on days it was actually recorded; the line between dots is interpolation.")
         notes.append("The index is total daily insulin per unit of glucose: it rises as sensitivity falls. A single day of it is noisy — one late dinner moves it. Read the shape over weeks, not the day-to-day.")
         return notes
     }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        f.timeStyle = .none
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
 
     // MARK: - Palette
 
@@ -371,6 +534,12 @@ struct TrendsView: View {
         t.userInterfaceStyle == .dark
             ? UIColor(red: 0x9b / 255, green: 0x8a / 255, blue: 0xd4 / 255, alpha: 1)
             : UIColor(red: 0x7d / 255, green: 0x6c / 255, blue: 0xb8 / 255, alpha: 1)
+    })
+
+    private static let rule = Color(uiColor: UIColor { t in
+        t.userInterfaceStyle == .dark
+            ? UIColor(white: 0.78, alpha: 1)
+            : UIColor(white: 0.32, alpha: 1)
     })
 
     private static let grid = Color(uiColor: UIColor { t in

@@ -233,7 +233,8 @@ struct HistoryView: View {
                 case .trends:
                     TrendsView(days: dailySeries,
                                glucoseUnit: health.glucoseUnitLabel,
-                               weightUnit: health.weightUnitLabel)
+                               weightUnit: health.weightUnitLabel,
+                               weightPadding: health.weightAxisPadding)
                 }
             }
             .sheet(item: $editingEntry) { entry in

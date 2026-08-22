@@ -350,8 +350,18 @@ the card rather than left to be noticed:
 ## Trends
 
 Five charts stacked on one shared time axis, day by day over three months.
-Drag any of them and all five scroll together, so a day lines up down the
-screen. Reached from the chart button in the history toolbar.
+Reached from the chart button in the history toolbar.
+
+Three pieces of state are shared by every chart, which is the whole trick:
+
+- **Drag** to scroll,
+- **pinch** to zoom the time axis, between three days and the full range,
+- **tap** to pick a day — a dashed rule lands on it in all five charts, and each
+  one's readout switches from its latest value to that day's.
+
+All five follow, so a day stays lined up down the screen. A selected day with
+nothing to show reads as a dash rather than falling back to the latest value,
+which would answer a question about one day with a number from another.
 
 | Chart | |
 |---|---|
@@ -388,6 +398,15 @@ Two rules keep a chart from claiming more than it knows:
 - **Weight is drawn with dots as well as a line.** People weigh themselves when
   they remember to, and the line between two readings a week apart is
   interpolation, not measurement. The dots say which days were actually stood on.
+
+**Weight is the one chart not scaled from zero.** It gets its own range plus
+three kilograms either side, because on a zero-based axis two kilos of real
+drift is a flat line. The pad is converted through `HKQuantity`, so pounds and
+stones get a band of the same physical size rather than the same number.
+
+Marks sit at the middle of their day rather than at midnight. A bar binned by
+day spans midnight to midnight, so a line plotted at midnight would run through
+its left edge and the selection rule could only ever agree with one of them.
 
 Day length is asked of the calendar rather than assumed to be 86,400 seconds, so
 the twenty-five-hour and twenty-three-hour days at each clock change are not

@@ -245,6 +245,17 @@ final class HealthStore: ObservableObject {
         }
     }
 
+    /// Three kilograms expressed in whatever unit Health is set to — the pad
+    /// the weight chart leaves either side of the range it plots.
+    ///
+    /// Converted through `HKQuantity` rather than by matching the unit label,
+    /// so pounds and stones get a band of the same physical size rather than
+    /// the same number.
+    var weightAxisPadding: Double {
+        HKQuantity(unit: .gramUnit(with: .kilo), doubleValue: 3)
+            .doubleValue(for: weightUnit)
+    }
+
     /// Most recent reading, if any.
     var latestGlucose: GlucoseSample? { glucose.last }
 
