@@ -37,9 +37,9 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
                    + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
-                   + DailySeries + A1c + SharedStore (App Group)
+                   + DailySeries + A1c + SharedStore (App Group) + BasalSchedule
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
-iOSApp/            iPhone app: read-only history list
+iOSApp/            iPhone app: history, charts, and the basal reminder setting
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
 Config.xcconfig    ← EDIT THIS: team id + bundle ids
 fastlane/          match signing + build + TestFlight upload
@@ -224,6 +224,82 @@ top of the plot; the IOB figure stays exact. Widen `unitsCeiling` in
 > Duration of insulin action varies per person (the book notes anywhere from
 > under 3 h to 5–6 h). The 4 h curve here is the book's typical case. To change
 > it, edit the table in `Shared/InsulinMath.swift`.
+
+It has one other state: when the basal reminder is due it drops all of the
+above and reads **BASAL!** — see below.
+
+## Basal reminder
+
+A standard time for the long-acting injection. When it arrives, the
+complication stops showing insulin on board and shows **BASAL!** instead, at
+three times the type size of anything that was there a moment before.
+
+Basal is the one dose nothing else in the day reminds you of. A bolus has a meal
+attached to it; a missed basal announces itself only hours later, by which point
+the evidence is indistinguishable from a bad day. It is also the largest single
+error in everything else here — see **Averages**, where a day with no basal on
+it divides an average without contributing to it.
+
+Set it on the iPhone: the **gear** in the history toolbar. The watch is told
+over the same local link the log uses and keeps its own copy, so the reminder
+fires with the phone nowhere near.
+
+> **Not a notification, deliberately.** A notification is cleared by the same
+> reflex that clears every other notification, and what is wanted here is
+> something that is simply *there* the next time the wrist goes up. So the
+> complication gives itself over to it instead.
+
+Type size does the work, not colour. Watch faces re-render complications in
+whatever mode the face is in — full colour, accented, flat — so a bright fill
+is not something the widget can count on, while a word filling the whole
+complication reads the same in every mode, dimmed always-on included.
+
+### What makes it stop
+
+Two things, whichever comes first:
+
+- **Logging basal.** Any basal entry clears it — from the watch dial, or added
+  on the phone. Logged up to **three hours early** still counts, so an early
+  dose is not asked for twice. That allowance is generous on purpose: being
+  prompted for long-acting insulin you have already taken is the only failure
+  mode here with a real consequence.
+- **Two hours.** Then it gives up, logged or not. The alert replaces the *whole*
+  complication, so a version that waited indefinitely would destroy the IOB
+  readout for the rest of any day the injection was taken but not logged — and
+  a complication that always says BASAL! is not a signal, it is wallpaper.
+
+Deleting today's basal on the phone puts the reminder back, if the two hours
+have not run out.
+
+The scheduled time is shown small under the word. That matters on the evening
+the dose was taken early and the alert fired anyway: seeing `due 22:00` is what
+tells you the app disagrees about today, rather than that you have forgotten
+something.
+
+### Landing on the minute
+
+WidgetKit renders a complication only at the dates its timeline gives it, and it
+budgets timeline *refreshes* per day — ask too often and requests get dropped
+rather than served. So the instants the alert turns on and off are **baked into
+the timeline** a day ahead, as entries of their own alongside the five-minute
+IOB samples. The flip happens at the scheduled minute with no refresh needed.
+
+Clearing works the other way round: logging a dose *asks* for a reload, and
+watchOS can decline. Worst case the word lingers until the next scheduled
+rebuild — bounded by the same **30 minutes** that bounds complication staleness
+everywhere else.
+
+The setting is stored as a time of day (minutes after midnight), not as a date,
+so it follows the wall clock through a time zone change or a clock change. Ten
+o'clock stays ten o'clock.
+
+> **It only works if you look at your watch.** No sound, no haptic, no
+> notification. If the wrist never comes up between the scheduled time and two
+> hours later, nothing has told you anything.
+
+> Set on the phone rather than the watch because the watch app is one crown
+> dial with no navigation in it, and a settings screen behind that dial would
+> be a gesture that could be hit on the way to logging a dose.
 
 ## Carb ratio
 

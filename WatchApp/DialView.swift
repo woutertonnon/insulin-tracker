@@ -159,16 +159,22 @@ struct DialView: View {
         }
     }
 
-    /// Push the recent bolus history into the App Group so the complication can
-    /// compute IOB itself, and nudge WidgetKit to rebuild its timeline.
+    /// Push what the complication reads into the App Group — the recent bolus
+    /// history, so it can compute IOB itself, and the newest basal, which is
+    /// what clears its basal reminder — then nudge WidgetKit to rebuild.
     private func syncWidget(including extra: LogEntry? = nil) {
-        var boluses = allEntries.filter { $0.kind == .insulin }
+        var entries = allEntries
         // A freshly-inserted entry may not be in @Query results yet.
-        if let extra, extra.kind == .insulin, !boluses.contains(where: { $0.id == extra.id }) {
-            boluses.append(extra)
+        if let extra, !entries.contains(where: { $0.id == extra.id }) {
+            entries.append(extra)
         }
         SharedStore.setBolusDoses(
-            boluses.map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+            entries
+                .filter { $0.kind == .insulin }
+                .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+        )
+        SharedStore.setLastBasal(
+            entries.filter { $0.kind == .basal }.map(\.timestamp).max()
         )
         WidgetCenter.shared.reloadAllTimelines()
     }

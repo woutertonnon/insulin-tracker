@@ -15,10 +15,11 @@ import WidgetKit
 ///   and deletions so each device's own history stays complete. Queued and
 ///   delivered in order, but any one of them can be delayed.
 /// * **A whole-list snapshot** (`updateApplicationContext`) carries every bolus
-///   still relevant to the complication. This is what the complication actually
-///   depends on, and it is self-healing: the context always holds the current
-///   state, so a single delivery repairs any amount of earlier drift. Nothing
-///   has to arrive in order, and nothing is lost if a transfer is dropped.
+///   still relevant to the complication, plus the basal reminder time. This is
+///   what the complication actually depends on, and it is self-healing: the
+///   context always holds the current state, so a single delivery repairs any
+///   amount of earlier drift. Nothing has to arrive in order, and nothing is
+///   lost if a transfer is dropped.
 final class ConnectivityManager: NSObject, WCSessionDelegate {
     static let shared = ConnectivityManager()
 
@@ -36,10 +37,15 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         static let key = "op"
         static let upsert = "upsert"
         static let delete = "delete"
+        static let settings = "settings"
     }
 
     /// Key for the whole-list snapshot, as a flat `[timestamp, units, …]`.
     private static let snapshotKey = "boluses"
+
+    /// Key for the basal reminder, as minutes after local midnight, or
+    /// `BasalSchedule.reminderOff`. Travels phone → watch only.
+    private static let basalReminderKey = "basalReminder"
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -72,6 +78,27 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         ])
     }
 
+    /// Push the basal reminder time to the watch, where the complication reads
+    /// it out of the App Group.
+    ///
+    /// Sent on the same channel as a dose, which can wake the watch app in the
+    /// background to take delivery. That matters: the setting does nothing
+    /// until it crosses, and a reminder that waits for the next time the watch
+    /// app happens to be opened is not a reminder.
+    ///
+    /// **Callers must debounce.** That channel is budgeted per day, and a time
+    /// picker emits a change per tick of the wheel.
+    @MainActor
+    func sendBasalReminder(_ reminder: BasalSchedule.Reminder?) {
+        transfer([
+            Op.key: Op.settings,
+            Self.basalReminderKey: reminder?.minuteOfDay ?? BasalSchedule.reminderOff,
+        ])
+        // And into the context, so the current setting is also sitting there
+        // for a watch that misses the transfer entirely.
+        pushSnapshot()
+    }
+
     /// Every bolus, flattened. Rides along with each message so a single
     /// delivery carries complete state — the receiver never has to have seen
     /// any earlier message for the complication to end up correct.
@@ -85,7 +112,8 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
             .flatMap { [$0.timestamp.timeIntervalSince1970, $0.amount] }
     }
 
-    /// Publish the complete bolus list as application context too.
+    /// Publish the complete bolus list, and the basal reminder, as application
+    /// context too.
     ///
     /// This is a *secondary* channel. It is delivered whenever the counterpart
     /// next runs, which makes it a good backstop, but it does not reliably wake
@@ -93,12 +121,23 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     /// hears about a change. The snapshot rides along with the transfers above
     /// for that.
     @MainActor
-    func pushBolusSnapshot() {
+    func pushSnapshot() {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated else { return }
+
+        var context: [String: Any] = [Self.snapshotKey: currentBolusSnapshot()]
+        #if os(iOS)
+        // The phone owns the reminder, so only the phone publishes it. Always
+        // present, as a minute or as the "off" sentinel: an absent key means
+        // the sender said nothing about the reminder, which must not read as
+        // "turn it off".
+        context[Self.basalReminderKey] =
+            BasalSchedule.Defaults.current()?.minuteOfDay ?? BasalSchedule.reminderOff
+        #endif
+
         // Throws only if the session is not activated, which is guarded above.
-        try? session.updateApplicationContext([Self.snapshotKey: currentBolusSnapshot()])
+        try? session.updateApplicationContext(context)
     }
 
     private func transfer(_ payload: [String: Any]) {
@@ -152,7 +191,7 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         Task { @MainActor in
             // Republish the snapshot now that we can, so a counterpart that
             // missed earlier edits is brought up to date on connect.
-            pushBolusSnapshot()
+            pushSnapshot()
         }
     }
 
@@ -190,7 +229,14 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     @MainActor
     private func applySnapshot(_ context: [String: Any]) {
         #if os(watchOS)
-        guard context[Self.snapshotKey] != nil else { return }
+        // The reminder, unlike the doses, *is* data: the phone owns it and this
+        // is a copy of it, so it is written straight through.
+        applySettings(context)
+
+        guard context[Self.snapshotKey] != nil else {
+            WidgetCenter.shared.reloadAllTimelines()
+            return
+        }
         guard let container = modelContainer else { return }
         refreshComplication(using: container.mainContext)
         #endif
@@ -198,6 +244,19 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
 
     @MainActor
     private func apply(_ userInfo: [String: Any]) {
+        // Messages sent before `op` existed were always upserts.
+        let op = userInfo[Op.key] as? String ?? Op.upsert
+
+        // Settings carry no entry, so they are handled before anything asks for
+        // an id or a model container.
+        if op == Op.settings {
+            #if os(watchOS)
+            applySettings(userInfo)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
+            return
+        }
+
         guard
             let container = modelContainer,
             let idString = userInfo["id"] as? String,
@@ -205,8 +264,6 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         else { return }
 
         let context = container.mainContext
-        // Messages sent before `op` existed were always upserts.
-        let op = userInfo[Op.key] as? String ?? Op.upsert
         let descriptor = FetchDescriptor<LogEntry>(predicate: #Predicate { $0.id == id })
         let existing = try? context.fetch(descriptor).first
 
@@ -243,7 +300,22 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     }
 
     #if os(watchOS)
-    /// Republish the bolus history the complication reads, then rebuild it.
+    /// Store the basal reminder where the widget process can read it.
+    ///
+    /// One-way by design: the phone owns the setting, and nothing on iOS needs
+    /// this — the phone has no App Group of its own, and it is the source of
+    /// the value anyway.
+    @MainActor
+    private func applySettings(_ payload: [String: Any]) {
+        guard let minute = payload[Self.basalReminderKey] as? Int else { return }
+        // `reminderOff` fails `Reminder`'s validating initialiser, which is how
+        // "off" arrives as nil rather than as a reminder at some odd hour.
+        SharedStore.setBasalReminder(BasalSchedule.Reminder(minuteOfDay: minute))
+    }
+
+    /// Republish what the complication reads out of the App Group, then rebuild
+    /// it: the bolus history for IOB, and the newest basal, which is what
+    /// clears the basal reminder.
     @MainActor
     private func refreshComplication(using context: ModelContext) {
         // Fetched unfiltered and narrowed in Swift on purpose: a #Predicate that
@@ -255,6 +327,12 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
             .sorted { $0.timestamp < $1.timestamp }
         SharedStore.setBolusDoses(
             boluses.map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
+        )
+        // `max()` over the whole log rather than the newest row, so deleting
+        // today's basal on the phone puts the reminder back rather than leaving
+        // it cleared by a dose that no longer exists.
+        SharedStore.setLastBasal(
+            all.filter { $0.kind == .basal }.map(\.timestamp).max()
         )
         WidgetCenter.shared.reloadAllTimelines()
     }

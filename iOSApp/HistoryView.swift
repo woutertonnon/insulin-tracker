@@ -220,6 +220,11 @@ struct HistoryView: View {
                         Image(systemName: "chart.xyaxis.line")
                     }
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink(value: Destination.settings) {
+                        Image(systemName: "gearshape")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         addingNew = true
@@ -235,6 +240,8 @@ struct HistoryView: View {
                                glucoseUnit: health.glucoseUnitLabel,
                                weightUnit: health.weightUnitLabel,
                                weightPadding: health.weightAxisPadding)
+                case .settings:
+                    SettingsView()
                 }
             }
             .sheet(item: $editingEntry) { entry in
@@ -260,13 +267,14 @@ struct HistoryView: View {
         try? context.save()
         // Tell the watch, so its store — and the complication's IOB — drop it too.
         ConnectivityManager.shared.sendDelete(id: id)
-        ConnectivityManager.shared.pushBolusSnapshot()
+        ConnectivityManager.shared.pushSnapshot()
     }
 
     /// Screens reachable from here. An enum rather than a bare marker so the
     /// next one is a case, not a second mechanism.
     private enum Destination: Hashable {
         case trends
+        case settings
     }
 
     /// A row in the history: something logged here, or a workout read from
@@ -526,7 +534,7 @@ private struct EntryEditView: View {
         try? context.save()
         // Mirror the change onto the watch so the complication stays correct.
         ConnectivityManager.shared.send(saved)
-        ConnectivityManager.shared.pushBolusSnapshot()
+        ConnectivityManager.shared.pushSnapshot()
         dismiss()
     }
 
@@ -536,7 +544,7 @@ private struct EntryEditView: View {
             context.delete(entry)
             try? context.save()
             ConnectivityManager.shared.sendDelete(id: id)
-            ConnectivityManager.shared.pushBolusSnapshot()
+            ConnectivityManager.shared.pushSnapshot()
         }
         dismiss()
     }

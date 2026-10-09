@@ -8,6 +8,13 @@ import UIKit
 struct InsulinEntry: TimelineEntry {
     let date: Date
     let doses: [InsulinMath.Dose]
+
+    /// The basal reminder, and the newest basal logged, baked in exactly like
+    /// the doses: the view decides from its own `date` whether the reminder is
+    /// outstanding, so a single timeline carries both sides of the flip and the
+    /// complication changes on the minute without waiting on a refresh.
+    let basalReminder: BasalSchedule.Reminder?
+    let lastBasal: Date?
 }
 
 struct InsulinProvider: TimelineProvider {
@@ -25,17 +32,29 @@ struct InsulinProvider: TimelineProvider {
     /// every five minutes between refreshes.
     private let maxStaleness: TimeInterval = 30 * 60
 
+    /// How far ahead the basal alert's on/off instants are baked in. A day plus
+    /// the window itself, so one complete cycle is always present whenever the
+    /// timeline happens to be built.
+    private let reminderLookahead: TimeInterval = 24 * 3600 + BasalSchedule.alertWindow
+
     func placeholder(in context: Context) -> InsulinEntry {
         InsulinEntry(date: .now,
-                     doses: [InsulinMath.Dose(units: 3.5, date: .now.addingTimeInterval(-2400))])
+                     doses: [InsulinMath.Dose(units: 3.5, date: .now.addingTimeInterval(-2400))],
+                     basalReminder: nil,
+                     lastBasal: nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (InsulinEntry) -> Void) {
-        completion(InsulinEntry(date: .now, doses: SharedStore.bolusDoses()))
+        completion(InsulinEntry(date: .now,
+                                doses: SharedStore.bolusDoses(),
+                                basalReminder: SharedStore.basalReminder(),
+                                lastBasal: SharedStore.lastBasal()))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<InsulinEntry>) -> Void) {
         let doses = SharedStore.bolusDoses()
+        let reminder = SharedStore.basalReminder()
+        let lastBasal = SharedStore.lastBasal()
         let now = Date.now
 
         // `doses` is read once here and baked into every entry below, so the
@@ -51,16 +70,32 @@ struct InsulinProvider: TimelineProvider {
         let horizon = now.addingTimeInterval(maxStaleness)
         let end = max(active, horizon)
 
-        // The 100 cap is a backstop, not a real bound: the longest timeline
-        // this can produce is the 4-hour decay at 5-minute steps, 48 entries.
-        var entries: [InsulinEntry] = []
+        // The 100 cap is a backstop, not a real bound: the longest run of
+        // samples this can produce is the 4-hour decay at 5-minute steps, 48.
+        var dates: [Date] = []
         var t = now
-        while t <= end && entries.count < 100 {
-            entries.append(InsulinEntry(date: t, doses: doses))
+        while t <= end && dates.count < 100 {
+            dates.append(t)
             t = t.addingTimeInterval(sampleInterval)
         }
-        if entries.isEmpty {
-            entries = [InsulinEntry(date: now, doses: doses)]
+        if dates.isEmpty {
+            dates = [now]
+        }
+
+        // Then the instants the basal alert turns on and off, which can be a
+        // day out — well past the samples above. Added as individual dates
+        // rather than by extending the sampling, which at five-minute steps
+        // would be hundreds of entries to reach the same two moments.
+        if let reminder {
+            dates += BasalSchedule.transitions(from: now,
+                                               to: now.addingTimeInterval(reminderLookahead),
+                                               reminder: reminder)
+        }
+
+        // Sorted and de-duplicated: WidgetKit wants strictly increasing dates,
+        // and a transition can land exactly on a sample.
+        let entries = Set(dates).sorted().map {
+            InsulinEntry(date: $0, doses: doses, basalReminder: reminder, lastBasal: lastBasal)
         }
 
         // Always ask again by the horizon, even with nothing on board — a dose
@@ -118,6 +153,25 @@ struct InsulinOnBoardView: View {
         entry.doses.last
     }
 
+    /// The scheduled instant the basal dose is overdue from, or nil if there is
+    /// nothing outstanding.
+    private var basalDue: Date? {
+        if case .due(let since) = BasalSchedule.status(at: entry.date,
+                                                       reminder: entry.basalReminder,
+                                                       lastBasal: entry.lastBasal) {
+            return since
+        }
+        return nil
+    }
+
+    /// The scheduled time, in the watch's own 12/24-hour setting.
+    private static let dueFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
     /// Activity projected forward over the fixed 4-hour window, using the same
     /// exponential model as the iPhone chart.
     private var forecast: [InsulinMath.ForecastPoint] {
@@ -126,7 +180,13 @@ struct InsulinOnBoardView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let last = lastBolus {
+            if let due = basalDue {
+                // Everything else goes. A reminder sharing the complication
+                // with the usual readout would be one more small thing among
+                // small things — the point is that a glance cannot land on
+                // this face and come away thinking it looked normal.
+                basalAlert(due: due)
+            } else if let last = lastBolus {
                 // The chart takes the whole complication…
                 chart
                 // …and the readouts sit in the top-right corner, which the
@@ -142,6 +202,37 @@ struct InsulinOnBoardView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .containerBackground(for: .widget) { Color.clear }
+    }
+
+    /// The basal reminder, filling the complication.
+    ///
+    /// Type size is doing the work here, not colour. Watch faces re-render
+    /// complications in whatever mode the face is in — full colour, accented,
+    /// or flat — so a bright fill is not something this view can count on,
+    /// while a word at three times the height of everything that was here a
+    /// moment ago reads the same in every mode, dimmed always-on included.
+    /// `widgetAccentable` puts it in the accented group so tinted faces draw it
+    /// bright rather than recede it into the background.
+    ///
+    /// The scheduled time underneath says *which* dose, which matters on the
+    /// evening the dose was taken early and the alert should not have fired:
+    /// seeing "due 22:00" is what tells you the app disagrees about today
+    /// rather than that you have forgotten something.
+    private func basalAlert(due: Date) -> some View {
+        VStack(spacing: 0) {
+            Text("BASAL!")
+                .font(.system(size: 34, weight: .heavy, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+            Text("due \(Self.dueFormatter.string(from: due))")
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .foregroundStyle(.indigo)
+        .widgetAccentable()
     }
 
     /// IOB over the elapsed time, in the top-right corner.
@@ -245,7 +336,7 @@ struct InsulinOnBoardWidget: Widget {
             InsulinOnBoardView(entry: entry)
         }
         .configurationDisplayName("Insulin on Board")
-        .description("Insulin still working, with the next four hours of insulin activity.")
+        .description("Insulin still working, with the next four hours of insulin activity — and a BASAL! reminder at your basal time.")
         .supportedFamilies([.accessoryRectangular])
     }
 }
