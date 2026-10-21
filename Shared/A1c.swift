@@ -53,6 +53,24 @@ enum A1c {
         (percent - 2.15) * 10.929
     }
 
+    /// The glucose management indicator (Bergenstal et al., 2018) — the figure
+    /// a CGM report carries in place of an estimated A1c, from a different fit
+    /// to a different population, which is why it and the ADAG estimate can
+    /// disagree by a few tenths.
+    ///
+    ///     GMI (%) = 3.31 + 0.02392 × mean glucose (mg/dL)
+    ///             = 3.31 + 0.43094 × mean glucose (mmol/L)
+    ///
+    /// Given on the doctor's report rather than in the app, because it is the
+    /// number a clinic is used to reading beside time in range; the app's own
+    /// charts stay on ADAG.
+    static func gmi(fromMeanGlucose mean: Double, unit: String) -> Double? {
+        let estimate = unit.contains("mol")
+            ? 3.31 + 0.43094 * mean
+            : 3.31 + 0.02392 * mean
+        return plausible.contains(estimate) ? estimate : nil
+    }
+
     /// "6.8"  — the percent sign lives in the panel's unit label.
     static func format(_ percent: Double) -> String {
         String(format: "%.1f", percent)

@@ -38,8 +38,11 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
                    + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
                    + DailySeries + A1c + SharedStore (App Group) + BasalSchedule
+                   + Report (the doctor's report, computed)
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
-iOSApp/            iPhone app: history, charts, and the basal reminder setting
+iOSApp/            iPhone app: history, charts, the basal reminder setting,
+                   and the doctor's report as a PDF (ReportView / ReportPDF /
+                   ReportPageView)
 project.yml        XcodeGen spec — the .xcodeproj is generated, not committed
 Config.xcconfig    ← EDIT THIS: team id + bundle ids
 fastlane/          match signing + build + TestFlight upload
@@ -535,6 +538,78 @@ the app asserting a goal it has no basis for.
 
 > A single day of the index is noisy — one late dinner moves it. It is there to
 > be read as a shape over weeks, not day to day.
+
+## Doctor's report
+
+A PDF of the last 14, 30 or 90 whole days, laid out the way a clinic already
+reads glucose data, with the things a CGM report cannot know set beside it.
+Reached from the **document** button in the history toolbar; the share button
+on that screen hands it to AirDrop, Mail, print, or Files.
+
+It is modelled on the **Ambulatory Glucose Profile** (AGP), because that is
+the form every diabetes clinic reads CGM in, and a report in a familiar shape
+is read rather than deciphered. Pages, in order:
+
+1. **Summary.** Mean glucose, GMI, estimated A1c, SD, CV and CGM coverage as
+   tiles; **time in range** as the AGP's stacked bar and a table of the five
+   consensus bands with percentages, hours per day and goals; the **daily
+   profile** — every reading in the period folded onto one 24-hour day, with
+   the median, the 25–75% band and the 5–95% band per half hour; basal, bolus,
+   total, bolus share and boluses per day; carbohydrate logged per day; and a
+   list of everything that makes a figure mean less than it looks.
+2. **Day by day.** Mean glucose, insulin (basal and bolus as parts of one bar),
+   carbohydrate, active energy and weight, one mark per calendar day on a
+   shared time axis. Charts with nothing in them are left out.
+3. **Notes.** The basal pattern — days logged, the usual dose and its range,
+   the usual time; the app's 28-day **insulin-to-carb ratio** grid and
+   measured sensitivity, carried as they stand rather than recomputed; and
+   how every figure was made, with the references, so the clinic does not have
+   to take the numbers on trust.
+4. **The day table.** One row per day: CGM coverage, mean, SD, time below, in
+   and above range, basal, bolus, total, number of boluses, carbs, meals
+   logged by size, workout minutes, active energy, weight. A dash is a day
+   with nothing recorded.
+5. **Every entry** (optional). Each dose, meal and workout in time order, two
+   columns to a page. Off by default; the day table is what a clinic usually
+   wants, and this is for the visit where one particular day needs explaining.
+
+The glucose bands and goals are the **2019 international consensus on time in
+range** (Battelino et al.): 3.9–10.0 mmol/L (70–180 mg/dL) in range, below 3.0
+(54) very low, above 13.9 (250) very high, with the goals printed beside them.
+They are not configurable — a report meant to be read against the published
+targets should use the published edges — and the page says that targets are
+individual.
+
+**GMI is on the report and not in the app.** The glucose management indicator
+(Bergenstal et al., 2018) is the figure a CGM report carries in place of an
+estimated A1c, from a different fit to a different population, which is why it
+and the ADAG estimate on the trends chart can disagree by a few tenths. The
+report gives both, each labelled with its source, so the clinic sees the number
+it is used to beside the one the patient has been watching.
+
+**Whole days ending yesterday**, deliberately. A report generated at eleven in
+the morning should not carry a day with a third of its readings in it, and a
+dated range reads more easily across a desk than "the last 90 days from
+10:42". Health is queried a day further back than the averages need so that
+the 90-day report is complete.
+
+Per-day insulin is divided by the days the log covers, counted from the first
+entry ever made — the same rule as the Averages card — so a log that began
+mid-period does not read as a period of half doses. The caveats on page one
+say when that has happened, along with days with no basal entry, CGM coverage
+under 80%, and meals logged by size.
+
+The pages are ordinary SwiftUI views laid out at paper size and drawn through
+`ImageRenderer` into a Core Graphics PDF context, so the charts are vectors and
+the text is text. Tables are paginated by arithmetic — every row is a fixed
+height — rather than by measuring, so nothing can run off the bottom of a
+page. Paper is Letter where the locale measures in inches and A4 everywhere
+else. Colours are fixed print colours chosen so that each pair that sits side
+by side stays apart for colour-blind readers and in greyscale, and every band
+and bar is also named in words.
+
+> Nothing on it has been reviewed by a clinician, and it says so. It describes
+> what already happened; it is not a dose recommendation.
 
 ## Apple Health
 

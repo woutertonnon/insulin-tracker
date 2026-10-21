@@ -26,7 +26,12 @@ struct HistoryView: View {
     /// Driven by the longest averaging window, not the chart's: the chart needs
     /// eight hours, the carb ratio four weeks, and the long-run averages and
     /// the trends charts three months.
-    private var healthWindow: Date { now.addingTimeInterval(-InsulinStats.longestWindow) }
+    ///
+    /// The doctor's report covers whole days ending yesterday, so its ninety
+    /// days start up to a day before a window measured back from the clock.
+    private var healthWindow: Date {
+        min(now.addingTimeInterval(-InsulinStats.longestWindow), Report.queryStart(now: now))
+    }
 
     /// Glucose from the carb-ratio window only.
     ///
@@ -221,6 +226,11 @@ struct HistoryView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink(value: Destination.report) {
+                        Image(systemName: "doc.text")
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
                     NavigationLink(value: Destination.settings) {
                         Image(systemName: "gearshape")
                     }
@@ -240,6 +250,8 @@ struct HistoryView: View {
                                glucoseUnit: health.glucoseUnitLabel,
                                weightUnit: health.weightUnitLabel,
                                weightPadding: health.weightAxisPadding)
+                case .report:
+                    ReportView(entries: entries, health: health, carbRatio: carbRatio)
                 case .settings:
                     SettingsView()
                 }
@@ -274,6 +286,7 @@ struct HistoryView: View {
     /// next one is a case, not a second mechanism.
     private enum Destination: Hashable {
         case trends
+        case report
         case settings
     }
 
