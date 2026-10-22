@@ -359,7 +359,9 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         // with a connection, so look its temperature up now rather than at
         // the next quarter-hour.
         if op == Op.upsert, userInfo["latitude"] != nil, userInfo["temperature"] == nil {
-            await WeatherBackfill.run(in: context, force: true)
+            Task { @MainActor in
+                await WeatherBackfill.run(in: context, force: true)
+            }
         }
         #endif
 
