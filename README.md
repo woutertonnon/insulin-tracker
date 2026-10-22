@@ -768,6 +768,12 @@ HealthKit needs the capability enabled on the App ID before it will sign:
 Skipping either makes every build fail at the signing step — `match` regenerates
 profiles but cannot enable capabilities.
 
+The watch's motion purpose string (`NSMotionUsageDescription`) has to be in
+`iOSApp/Info.plist` as well, though the phone never reads motion: App Store
+validation checks the bundle the watch app ships inside, and rejects the
+upload with `ITMS-90683: Missing purpose string` without it. The location
+string is in both for the same reason.
+
 Both HealthKit purpose strings are required in `iOSApp/Info.plist`, including
 `NSHealthUpdateUsageDescription`, even though this app never writes to Health.
 App Store validation keys off the entitlement, not off which APIs are called, and
