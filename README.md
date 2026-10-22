@@ -144,14 +144,25 @@ lands in TestFlight in ~10–20 min after Apple finishes processing. Install via
 
 ### 7. Assign the Action Button (on the watch)
 
-On the Watch Ultra: **Settings → Action Button → Action → Shortcut → Open
-Insulin**. Now a single press of the Action Button from anywhere opens straight
-to the dial — and a second press, with a reading on screen, flips its inside /
+The Action Button only takes a shortcut from your own library, and the library
+is built on the iPhone:
+
+1. On the **iPhone**, open **Shortcuts → + → search "Open Insulin"** and add
+   that action (it is the app's own). Name the shortcut **Insulin**.
+2. Open the shortcut's details (ⓘ) and turn on **Show on Apple Watch**.
+3. On the **Watch Ultra**: **Settings → Action Button → Action → Shortcut →
+   Insulin**.
+
+Now a single press of the Action Button from anywhere opens straight to the
+dial — and a second press, with a reading on screen, flips its inside /
 outside badge (see **Blood sugar readings**).
 
 > The **Shortcut**, not **Open App**. Set to Open App, the button only launches
-> the app and a second press hands it nothing. Set to the Shortcut, every press
-> runs the app's intent, which is what the badge listens for.
+> the app and a second press hands it nothing. Set to the shortcut, every press
+> runs the app's intent, which is what the badge listens for. The intent is
+> compiled into both apps under one name so the iPhone can offer the action
+> and the watch can run it locally; the app's built-in shortcut, visible in
+> the watch's Shortcuts app, cannot itself be assigned to the button.
 
 ---
 
