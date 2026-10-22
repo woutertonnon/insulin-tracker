@@ -76,6 +76,7 @@ targets:
     sources:
       - path: WidgetExtension
       - path: Shared/SharedStore.swift
+      - path: Shared/GlucoseUnit.swift
       - path: Shared/InsulinMath.swift
       - path: Shared/BasalSchedule.swift
     settings:
