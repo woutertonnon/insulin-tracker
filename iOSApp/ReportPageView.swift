@@ -686,6 +686,8 @@ struct ReportPageView: View {
         "Nathan DM, Kuenen J, Borg R, et al. Translating the A1C assay into estimated average glucose values. Diabetes Care. 2008;31(8):1473–1478.",
         "Rapid-acting (NovoRapid) action curve: the exponential insulin activity model of OpenAPS, Loop and AndroidAPS, peak 75 min, duration 4 h.",
         "Long-acting (Lantus) action curve: Lepore M, Pampanelli S, Fanelli C, et al. Pharmacokinetics and pharmacodynamics of subcutaneous injection of long-acting human insulin analog glargine, NPH insulin, and ultralente human insulin and continuous subcutaneous infusion of insulin lispro. Diabetes. 2000;49(12):2142–2148.",
+        "Meter readings adjusted for outside temperature: adjusted = reading − 0.0928 mmol/L per °C × (T − 22.5 °C). Riding the Glucose Trail, \"BG & temperatures\", fitted on a Contour Next One, mostly between 0 and 15 °C. ridingtheglucosetrail.com/p/bg-temperatures",
+        "Outside temperature at each reading: weather data by Open-Meteo.com, CC BY 4.0, downscaled to the reading's altitude.",
     ]
 
     // MARK: - The day table
@@ -802,7 +804,7 @@ struct ReportPageView: View {
         let left = Array(all.prefix(half))
         let right = Array(all.dropFirst(half))
         return VStack(alignment: .leading, spacing: 0) {
-            sectionTitle("Every dose, reading and workout" + (continued ? " (continued)" : ""))
+            sectionTitle("Every dose, reading and workout" + (continued ? " (continued)" : "") + " · temperature [8], adj. [7]")
                 .padding(.bottom, 6)
             HStack(alignment: .top, spacing: 16) {
                 logColumn(left)
@@ -828,6 +830,7 @@ struct ReportPageView: View {
                         .frame(width: 56, alignment: .leading)
                     Text(line.amount)
                         .frame(maxWidth: .infinity, alignment: .trailing)
+                        .minimumScaleFactor(0.8)
                 }
                 .font(.system(size: 8).monospacedDigit())
                 .lineLimit(1)

@@ -45,6 +45,12 @@ struct HistoryView: View {
         entries.filter { $0.kind == .glucose }
     }
 
+    /// Every reading marked inside or outside by hand, with where it was —
+    /// what teaches the app which places are indoors.
+    private var marks: [Temperature.Mark] {
+        entries.compactMap(\.mark)
+    }
+
     /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
     /// its action profile isn't described by this curve.
     ///
@@ -167,7 +173,10 @@ struct HistoryView: View {
                                         Button {
                                             editingEntry = entry
                                         } label: {
-                                            EntryRow(entry: entry, unit: health.glucoseUnitPreference)
+                                            EntryRow(entry: entry,
+                                                     unit: health.glucoseUnitPreference,
+                                                     outings: health.outings,
+                                                     marks: marks)
                                         }
                                         .buttonStyle(.plain)
                                         .swipeActions(edge: .trailing) {
@@ -231,18 +240,22 @@ struct HistoryView: View {
                 }
             }
             .sheet(item: $editingEntry) { entry in
-                EntryEditView(entry: entry, unit: health.glucoseUnitPreference)
+                EntryEditView(entry: entry, unit: health.glucoseUnitPreference, outings: health.outings, marks: marks)
             }
             .sheet(isPresented: $addingNew) {
-                EntryEditView(entry: nil, unit: health.glucoseUnitPreference)
+                EntryEditView(entry: nil, unit: health.glucoseUnitPreference, outings: health.outings, marks: marks)
             }
             .onReceive(ticker) { instant in
                 now = instant
-                Task { await health.refresh(since: healthWindow) }
+                Task {
+                    await health.refresh(since: healthWindow)
+                    await WeatherBackfill.run(in: context)
+                }
             }
             .task {
                 await health.requestAccess()
                 await health.refresh(since: healthWindow, force: true)
+                await WeatherBackfill.run(in: context, force: true)
             }
         }
     }
@@ -345,6 +358,10 @@ extension EntryKind {
 private struct EntryRow: View {
     let entry: LogEntry
     let unit: GlucoseUnit
+    let outings: [Temperature.Outing]
+    let marks: [Temperature.Mark]
+
+    private var outdoors: Bool { entry.isOutdoors(outings: outings, marks: marks) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -355,14 +372,37 @@ private struct EntryRow: View {
                 Text(entry.kind.title)
                     .font(.body)
                     .foregroundStyle(.primary)
-                Text(entry.timestamp, style: .time)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(entry.timestamp, style: .time)
+                    // The weather matters only to a reading taken in it.
+                    if entry.kind == .glucose, outdoors {
+                        if let temperature = entry.temperature {
+                            Text("· outdoors, \(Temperature.format(celsius: temperature))")
+                        } else if entry.hasLocation {
+                            // Stamped, waiting on the phone's next lookup.
+                            Text("· outdoors")
+                            Image(systemName: "thermometer.medium")
+                        } else {
+                            Text("· outdoors")
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(entry.displayAmount(in: unit))
-                .font(.title3.weight(.semibold).monospacedDigit())
-                .foregroundStyle(entry.kind.tint)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(entry.displayAmount(in: unit))
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(entry.kind.tint)
+                // The reading corrected for the cold or heat it was taken in,
+                // beside the reading and never instead of it.
+                if let adjusted = entry.adjustedAmount(outings: outings, marks: marks) {
+                    Text("adjusted \(unit.format(adjusted))")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
             Image(systemName: "chevron.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -410,19 +450,36 @@ private struct EntryEditView: View {
     let entry: LogEntry?
     /// The unit readings are shown and typed in.
     let unit: GlucoseUnit
+    /// For the outdoors switch's starting position.
+    let outings: [Temperature.Outing]
+    let marks: [Temperature.Mark]
 
     @State private var kind: EntryKind
     /// In the unit on screen — mmol/L or mg/dL for a reading, units for a dose.
     @State private var amount: Double
     @State private var timestamp: Date
+    /// Starts at the badge as saved, or for a new reading at what the
+    /// workouts around now say. Saving writes it down either way — it is
+    /// the truth from then on — and notes whether it was moved, since only a
+    /// switch moved by hand teaches the app a place.
+    @State private var outdoors: Bool
+    private let initialOutdoors: Bool
 
-    init(entry: LogEntry?, unit: GlucoseUnit) {
+    init(entry: LogEntry?, unit: GlucoseUnit, outings: [Temperature.Outing], marks: [Temperature.Mark]) {
         self.entry = entry
         self.unit = unit
+        self.outings = outings
+        self.marks = marks
         let kind = entry?.kind ?? .glucose
         _kind = State(initialValue: kind)
         _amount = State(initialValue: Self.shown(entry?.amount ?? 0, as: kind, in: unit))
         _timestamp = State(initialValue: entry?.timestamp ?? .now)
+        // A new entry has no location, so no place can speak for it.
+        let initial = entry?.isOutdoors(outings: outings, marks: marks)
+            ?? Temperature.isOutdoors(at: .now, marked: nil, knownIndoors: false,
+                                      outings: outings, moving: nil)
+        _outdoors = State(initialValue: initial)
+        initialOutdoors = initial
     }
 
     private var isNew: Bool { entry == nil }
@@ -467,6 +524,17 @@ private struct EntryEditView: View {
                 Section("Time") {
                     DatePicker("Time", selection: $timestamp)
                         .datePickerStyle(.graphical)
+                }
+
+                if kind == .glucose {
+                    Section {
+                        Toggle("Taken outdoors", isOn: $outdoors)
+                        if let temperature = entry?.temperature {
+                            LabeledContent("Outside air", value: Temperature.format(celsius: temperature))
+                        }
+                    } footer: {
+                        Text("A meter reads low in the cold and high in the heat. Outdoors, the reading is shown with the outside temperature and a value adjusted for it; indoors the strip is at room temperature and nothing is adjusted. As the badge stood on the watch when the reading saved, or for a reading added here, as any workout around now suggests. What you set here is final.")
+                    }
                 }
 
                 if !isNew {
@@ -519,6 +587,10 @@ private struct EntryEditView: View {
         } else {
             saved = LogEntry(timestamp: timestamp, kind: kind, amount: value)
             context.insert(saved)
+        }
+        if kind == .glucose {
+            saved.outdoors = outdoors
+            if outdoors != initialOutdoors { saved.chosen = true }
         }
         try? context.save()
         // Mirror the change onto the watch so the complication stays correct.

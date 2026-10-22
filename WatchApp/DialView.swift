@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import WatchKit
 import WidgetKit
+import CoreLocation
+import Combine
 
 /// The single-screen logging UI.
 ///
@@ -15,6 +17,16 @@ import WidgetKit
 /// After you stop turning for `autoSaveDelay` seconds, the current value is
 /// saved automatically with the current date/time. If you never leave the
 /// neutral position, nothing is saved.
+///
+/// A reading also carries an **inside / outside** badge, because a meter
+/// reads low in the cold and high in the heat and the phone adjusts for the
+/// outside air only when the reading was taken in it. The badge starts at
+/// what the wrist can tell — a place flipped to inside before, else cycling
+/// or running in the last quarter hour means outside — and flips on a press
+/// of the Action Button, a Double Tap where the watch has it, or a tap on
+/// the badge. None of those is on the path of a dose, which is the rule this
+/// screen is built around. **What the badge shows when the reading saves is
+/// the truth**, flipped or not; nothing recomputes it afterwards.
 struct DialView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
@@ -28,13 +40,36 @@ struct DialView: View {
     @State private var index: Double = 0
     @State private var pendingSave: Task<Void, Never>?
     @State private var justSaved: SavedInfo?
+    @State private var dismissSaved: Task<Void, Never>?
 
     /// The unit readings are dialled in. The phone's copy of Health's choice,
     /// put in the App Group over WatchConnectivity; re-read whenever the app
     /// comes to the front, since a change can land while it is away.
     @State private var glucoseUnit = SharedStore.glucoseUnit()
 
+    /// Where a reading is taken. Asked for a fix the moment the crown enters
+    /// the reading region, so one is in hand by the time the reading saves.
+    @StateObject private var location = LocationStamper()
+
+    /// Whether the wrist was out moving, and how high up it is.
+    @StateObject private var wrist = WristContext()
+
+    /// The badge on the reading being dialled: what the wrist inferred,
+    /// whether the fix landed on a place marked inside before, and a flip if
+    /// one was made. Reset each time the crown leaves neutral.
+    @State private var inferredOutdoors = false
+    @State private var knownIndoors = false
+    @State private var flippedOutdoors: Bool?
+
+    /// Every reading marked by hand, with where it was — the places.
+    private var marks: [Temperature.Mark] { allEntries.compactMap(\.mark) }
+
     private let autoSaveDelay: Duration = .seconds(3)
+
+    /// How long the checkmark stays up, and how much longer after a flip on
+    /// it, so the result of the flip can be seen.
+    private let savedDisplay: Duration = .seconds(1.4)
+    private let savedDisplayAfterFlip: Duration = .seconds(2.5)
 
     /// Re-logging the **same kind** within this window edits the last entry
     /// instead of adding a new one (correcting a mis-entry).
@@ -115,6 +150,10 @@ struct DialView: View {
             .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
     }
 
+    /// The badge as it stands for the reading being dialled: a flip, else a
+    /// place marked inside before, else what the wrist saw.
+    private var shownOutdoors: Bool { flippedOutdoors ?? (knownIndoors ? false : inferredOutdoors) }
+
     var body: some View {
         ZStack {
             if let saved = justSaved {
@@ -133,7 +172,14 @@ struct DialView: View {
             isContinuous: false,
             isHapticFeedbackEnabled: true
         )
-        .onChange(of: index) { _, _ in
+        .onChange(of: index) { previous, _ in
+            if step > 0 {
+                location.requestFix()
+                wrist.begin()
+                if Int(previous.rounded()) <= 0 { enteredReadingRegion() }
+            } else {
+                wrist.end()
+            }
             scheduleSave()
         }
         .onChange(of: scenePhase) { _, phase in
@@ -156,6 +202,41 @@ struct DialView: View {
             resetToNeutral()
             syncWidget()
         }
+        // The Action Button, assigned to this app's Shortcut, runs the intent
+        // on every press — the first opens the dial, the next flips the badge.
+        .onReceive(NotificationCenter.default.publisher(for: .insulinActionButton)) { _ in
+            flipBadge()
+        }
+        // A fix landing while a reading is dialled may land on a known place.
+        .onReceive(location.$latest) { _ in
+            if step > 0 { refreshKnownPlace() }
+        }
+    }
+
+    /// Fresh badge for a fresh reading: no flip yet, and the wrist asked
+    /// whether it has been out moving.
+    @MainActor
+    private func enteredReadingRegion() {
+        flippedOutdoors = nil
+        inferredOutdoors = false
+        knownIndoors = false
+        refreshKnownPlace()
+        Task {
+            let moving = await wrist.wasMovingOutdoors()
+            // Only if the crown is still on a reading — not after it has gone
+            // back to neutral and on to a dose.
+            if step > 0 { inferredOutdoors = moving }
+        }
+    }
+
+    /// Whether the fix in hand — fresh or not; a place does not move — is
+    /// somewhere marked inside at least three times more than outside.
+    @MainActor
+    private func refreshKnownPlace() {
+        guard let fix = location.latest else { return }
+        knownIndoors = Temperature.isKnownIndoors(latitude: fix.coordinate.latitude,
+                                                  longitude: fix.coordinate.longitude,
+                                                  marks: marks)
     }
 
     /// Push what the complication reads into the App Group — the recent bolus
@@ -183,12 +264,15 @@ struct DialView: View {
     @ViewBuilder
     private var dialContent: some View {
         if step > 0 {
-            valueView(title: "BLOOD SUGAR",
-                      value: glucoseUnit.formatValue(glucoseValue(for: step)),
-                      unit: glucoseUnit.label,
-                      color: .pink,
-                      systemImage: "drop.fill",
-                      large: true)
+            VStack(spacing: 6) {
+                valueView(title: "BLOOD SUGAR",
+                          value: glucoseUnit.formatValue(glucoseValue(for: step)),
+                          unit: glucoseUnit.label,
+                          color: .pink,
+                          systemImage: "drop.fill",
+                          large: true)
+                badge(outdoors: shownOutdoors)
+            }
         } else if step < 0 {
             switch insulinValue(for: -step) {
             case .bolus(let units):
@@ -208,6 +292,30 @@ struct DialView: View {
             }
         } else {
             neutralView
+        }
+    }
+
+    /// Inside or outside, as a small capsule. A button, so a tap flips it and
+    /// so Double Tap — which drives an app's primary action — can be pointed
+    /// at it on watches that have the gesture.
+    private func badge(outdoors: Bool) -> some View {
+        let button = Button(action: flipBadge) {
+            Label(outdoors ? "outside" : "inside",
+                  systemImage: outdoors ? "sun.max" : "house")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(outdoors ? Color.teal.opacity(0.25) : Color.gray.opacity(0.25)))
+                .foregroundStyle(outdoors ? Color.teal : Color.secondary)
+        }
+        .buttonStyle(.plain)
+
+        return Group {
+            if #available(watchOS 11, *) {
+                button.handGestureShortcut(.primaryAction)
+            } else {
+                button
+            }
         }
     }
 
@@ -308,6 +416,11 @@ struct DialView: View {
             Text(info.text)
                 .font(.headline)
                 .multilineTextAlignment(.center)
+            // A reading's badge stays flippable on the checkmark, for the
+            // glance that comes a moment too late.
+            if let outdoors = info.outdoors {
+                badge(outdoors: outdoors)
+            }
         }
     }
 
@@ -334,6 +447,30 @@ struct DialView: View {
             if Task.isCancelled { return }
             await MainActor.run { save() }
         }
+    }
+
+    /// Flip inside ↔ outside: on the reading being dialled, restarting the
+    /// save timer so the result can be seen; or on the reading just saved,
+    /// rewriting it and keeping the checkmark up a little longer. A press
+    /// with a dose on screen, or nothing on screen, does nothing.
+    @MainActor
+    private func flipBadge() {
+        if let saved = justSaved {
+            guard let entry = saved.entry, entry.kind == .glucose, let outdoors = saved.outdoors else { return }
+            entry.outdoors = !outdoors
+            entry.chosen = true
+            try? context.save()
+            ConnectivityManager.shared.send(entry)
+            WKInterfaceDevice.current().play(.click)
+            justSaved = SavedInfo(text: saved.text, entry: entry, outdoors: !outdoors)
+            showSaved(for: savedDisplayAfterFlip)
+            return
+        }
+
+        guard step > 0 else { return }
+        flippedOutdoors = !shownOutdoors
+        WKInterfaceDevice.current().play(.click)
+        scheduleSave()
     }
 
     @MainActor
@@ -377,17 +514,59 @@ struct DialView: View {
         }
         lastSaved = LastSaved(kind: kind, entry: entry, at: now)
 
+        var savedOutdoors: Bool?
+        if kind == .glucose {
+            // The badge, as shown: the person saw it and let it stand or
+            // flipped it, and either way it is the truth from here on. A
+            // flip is also noted — only those teach the app a place.
+            savedOutdoors = shownOutdoors
+            entry.outdoors = shownOutdoors
+            entry.chosen = flippedOutdoors != nil
+            entry.moving = inferredOutdoors
+
+            // Stamp a reading with where it was taken. A fresh fix is
+            // attached before the entry crosses to the phone; one that
+            // arrives later is attached when it lands and the entry sent
+            // again, so the phone can look up the temperature either way.
+            if let fix = location.fresh {
+                stamp(entry, with: fix)
+            } else {
+                location.whenFixed { fix in
+                    stamp(entry, with: fix)
+                    try? context.save()
+                    ConnectivityManager.shared.send(entry)
+                }
+            }
+        }
+
         try? context.save()
         ConnectivityManager.shared.send(entry)
         WKInterfaceDevice.current().play(.success)
 
         syncWidget(including: entry)
 
-        justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount(in: glucoseUnit))
+        justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount(in: glucoseUnit),
+                              entry: entry,
+                              outdoors: savedOutdoors)
+        showSaved(for: savedDisplay)
+    }
 
-        // Show confirmation briefly, then return to neutral.
-        Task {
-            try? await Task.sleep(for: .seconds(1.4))
+    /// Where, and how high. The barometer's altitude where the watch has
+    /// one — a few metres, in a second — else the fix's, and only when the
+    /// fix vouches for it.
+    private func stamp(_ entry: LogEntry, with fix: CLLocation) {
+        entry.latitude = fix.coordinate.latitude
+        entry.longitude = fix.coordinate.longitude
+        entry.altitude = wrist.altitude ?? (fix.verticalAccuracy >= 0 ? fix.altitude : nil)
+    }
+
+    /// Show the checkmark for `duration`, then return to neutral. Calling it
+    /// again restarts the clock.
+    private func showSaved(for duration: Duration) {
+        dismissSaved?.cancel()
+        dismissSaved = Task {
+            try? await Task.sleep(for: duration)
+            if Task.isCancelled { return }
             await MainActor.run { resetToNeutral() }
         }
     }
@@ -395,13 +574,26 @@ struct DialView: View {
     private func resetToNeutral() {
         pendingSave?.cancel()
         pendingSave = nil
+        dismissSaved?.cancel()
+        dismissSaved = nil
         justSaved = nil
+        flippedOutdoors = nil
+        inferredOutdoors = false
+        wrist.end()
         index = 0
     }
 }
 
 private struct SavedInfo: Equatable {
     let text: String
+    /// The row behind the checkmark, so a flip on the checkmark can rewrite it.
+    let entry: LogEntry?
+    /// The badge as saved; nil for a dose, which has none.
+    let outdoors: Bool?
+
+    static func == (lhs: SavedInfo, rhs: SavedInfo) -> Bool {
+        lhs.text == rhs.text && lhs.outdoors == rhs.outdoors && lhs.entry === rhs.entry
+    }
 }
 
 private struct LastSaved {

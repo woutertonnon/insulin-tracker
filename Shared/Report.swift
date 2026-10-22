@@ -29,6 +29,24 @@ enum Report {
         let date: Date
         let kind: EntryKind
         let amount: Double
+        /// Outside air at a reading, °C, where known.
+        var temperature: Double? = nil
+        /// The badge as saved; nil only on a row from before it existed, which
+        /// is decided from the place, the workouts and the wrist.
+        var outdoors: Bool? = nil
+        /// Whether the person set it themselves.
+        var chosen: Bool? = nil
+        /// What the wrist saw just before: cycling or running.
+        var moving: Bool? = nil
+        /// Where, for the places marked inside before.
+        var latitude: Double? = nil
+        var longitude: Double? = nil
+
+        /// This reading as a lesson about its place, if the person chose.
+        var mark: Temperature.Mark? {
+            guard kind == .glucose, chosen == true, let outdoors, let latitude, let longitude else { return nil }
+            return Temperature.Mark(latitude: latitude, longitude: longitude, outdoors: outdoors)
+        }
     }
 
     struct Workout: Hashable, Sendable {
@@ -36,6 +54,8 @@ enum Report {
         let end: Date
         let name: String
         let kilocalories: Double?
+        /// Which side of the door, as Health has it.
+        var outdoors: Bool = true
 
         var minutes: Int { Int((end.timeIntervalSince(start) / 60).rounded()) }
     }
@@ -600,7 +620,14 @@ enum Report {
 
         let chosenEvents = inPeriod.filter { $0.date >= start }
         let chosenWorkouts = periodWorkouts.filter { $0.start >= start }
-        let log = (chosenEvents.map { line($0, unit: unit) } + chosenWorkouts.map(line))
+        // Every workout in the longest window, not just the period's: a
+        // reading on the period's first morning may follow a ride the
+        // evening before. And every mark ever made, for the places.
+        let outings = periodWorkouts.compactMap {
+            $0.start <= $0.end ? Temperature.Outing(span: $0.start...$0.end, outdoors: $0.outdoors) : nil
+        }
+        let marks = events.compactMap(\.mark)
+        let log = (chosenEvents.map { line($0, unit: unit, outings: outings, marks: marks) } + chosenWorkouts.map(line))
             .sorted { $0.date < $1.date }
             .enumerated()
             .map { LogLine(id: $0.offset,
@@ -677,12 +704,32 @@ enum Report {
             : sorted[mid]
     }
 
-    private static func line(_ event: Event, unit: GlucoseUnit) -> LogLine {
-        LogLine(id: 0,
-                date: event.date,
-                title: title(for: event.kind),
-                amount: formatAmount(kind: event.kind, amount: event.amount, unit: unit),
-                isWorkout: false)
+    private static func line(_ event: Event,
+                             unit: GlucoseUnit,
+                             outings: [Temperature.Outing],
+                             marks: [Temperature.Mark]) -> LogLine {
+        var amount = formatAmount(kind: event.kind, amount: event.amount, unit: unit)
+        // A reading taken outside carries the air it was taken in and the
+        // value corrected for it — see `Temperature`. Indoors, neither.
+        var outdoors = event.outdoors ?? false
+        if event.outdoors == nil {
+            // A row from before the badge: decided the way the watch would have.
+            var knownIndoors = false
+            if let latitude = event.latitude, let longitude = event.longitude {
+                knownIndoors = Temperature.isKnownIndoors(latitude: latitude, longitude: longitude, marks: marks)
+            }
+            outdoors = Temperature.isOutdoors(at: event.date, marked: nil, knownIndoors: knownIndoors,
+                                              outings: outings, moving: event.moving)
+        }
+        if event.kind == .glucose, let celsius = event.temperature, outdoors {
+            let adjusted = Temperature.adjustedGlucose(event.amount, celsius: celsius)
+            amount += " · \(Temperature.format(celsius: celsius)) · adj. \(unit.format(adjusted))"
+        }
+        return LogLine(id: 0,
+                       date: event.date,
+                       title: title(for: event.kind),
+                       amount: amount,
+                       isWorkout: false)
     }
 
     private static func line(_ workout: Workout) -> LogLine {

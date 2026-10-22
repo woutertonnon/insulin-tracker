@@ -20,6 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Checks whether you were cycling or running just before a blood sugar reading, to mark it as taken outside, and reads the barometer for your altitude at the reading.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Records where a blood sugar reading was taken, so the outside temperature at that moment can be looked up for it afterwards. The lookup sends that coordinate, height and time to Open-Meteo, a free weather service; nothing else leaves your devices.</string>
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>

@@ -115,9 +115,14 @@ struct ReportView: View {
         let weightUnit = health.weightUnitLabel
         let weightPadding = health.weightAxisPadding
         let glucose = health.glucose.map { Report.GlucosePoint(date: $0.date, value: $0.value) }
-        let events = entries.map { Report.Event(date: $0.timestamp, kind: $0.kind, amount: $0.amount) }
+        let events = entries.map {
+            Report.Event(date: $0.timestamp, kind: $0.kind, amount: $0.amount,
+                         temperature: $0.temperature, outdoors: $0.outdoors, chosen: $0.chosen,
+                         moving: $0.moving, latitude: $0.latitude, longitude: $0.longitude)
+        }
         let workouts = health.workouts.map {
-            Report.Workout(start: $0.start, end: $0.end, name: $0.name, kilocalories: $0.kilocalories)
+            Report.Workout(start: $0.start, end: $0.end, name: $0.name,
+                           kilocalories: $0.kilocalories, outdoors: $0.outdoors)
         }
         let energy = health.dailyEnergy.map { Report.Energy(day: $0.day, kilocalories: $0.kilocalories) }
         let weights = health.weights.map { Report.Weight(date: $0.date, value: $0.value) }

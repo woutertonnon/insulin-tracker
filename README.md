@@ -2,7 +2,9 @@
 
 A dead-simple Apple Watch app for logging insulin and finger-prick blood sugar
 readings as a Type 1 diabetic, plus a read-only history view on iPhone. Built with SwiftUI + SwiftData.
-No cloud, no accounts — data stays on your devices.
+No cloud, no accounts — data stays on your devices, with one exception you
+opt into: the coordinate, height and time of a blood sugar reading go to
+Open-Meteo so the outside temperature can be looked up for it.
 
 ## How it works
 
@@ -142,8 +144,14 @@ lands in TestFlight in ~10–20 min after Apple finishes processing. Install via
 
 ### 7. Assign the Action Button (on the watch)
 
-On the Watch Ultra: **Settings → Action Button → Action → Open App → Insulin**.
-Now a single press of the Action Button from anywhere opens straight to the dial.
+On the Watch Ultra: **Settings → Action Button → Action → Shortcut → Open
+Insulin**. Now a single press of the Action Button from anywhere opens straight
+to the dial — and a second press, with a reading on screen, flips its inside /
+outside badge (see **Blood sugar readings**).
+
+> The **Shortcut**, not **Open App**. Set to Open App, the button only launches
+> the app and a second press hands it nothing. Set to the Shortcut, every press
+> runs the app's intent, which is what the badge listens for.
 
 ---
 
@@ -319,6 +327,134 @@ over the CGM line, so a meter check sits on the chart beside the sensor it was
 checking. They feed none of the maths — every average, chart and estimate is
 built from the CGM, which has a reading every five minutes where a meter has a
 handful a day. They are listed in the doctor's report appendix.
+
+### Outside temperature
+
+A meter has no thermometer. Its strip's enzyme runs slower in the cold and
+faster in the heat, and the meter converts the current it sees as if the strip
+were at room temperature — so a reading taken outside in winter comes out low,
+and one in a heatwave comes out high. Every reading is therefore stamped with
+the **outside air temperature** where it was taken, and shown beside an
+**adjusted** value, following [*Riding the Glucose Trail*, "BG &
+temperatures"](https://ridingtheglucosetrail.com/p/bg-temperatures/):
+
+```
+adjusted = reading − 0.0928 mmol/L per °C × (T − 22.5 °C)
+```
+
+At 0 °C a reading of 5 mmol/L adjusts to about 7; at 40 °C, to about 3.4 —
+the article's own two examples. (The article prints its mmol/L shortcut with
+the sign the other way round, which contradicts both its model and both
+examples; the model and the examples are followed.) It is one person's Contour
+Next One, fitted mostly between 0 and 15 °C; another meter or batch of strips
+will sit off it, and a reading taken from a warm pocket moments after coming
+in is not at the outside temperature at all. The adjusted figure is shown
+**beside** the reading, never in place of it, and nothing else in the app uses
+it. The article also subtracts half a mmol/L as a safety margin; that is left
+to the reader.
+
+**The watch needs no network for this.** It records only where, how high and
+when — a one-shot location fix, asked for the moment the crown enters the
+reading region so it is usually in hand three seconds later when the reading
+saves. A fix that lands within the next minute is attached then and the entry
+sent again. The phone, whenever it next runs with a connection, asks
+[**Open-Meteo**](https://open-meteo.com) for that hour's air temperature at
+that spot and writes it onto the entry. The last 92 days come from its
+forecast endpoint, anything older from its archive. A dozen lookups at a time,
+no more often than every quarter hour unless a reading has just arrived; the
+free allowance is ten thousand a day. A reading still waiting shows a
+thermometer in the history.
+
+**Open-Meteo rather than WeatherKit, because of mountains.** WeatherKit takes a
+coordinate only and returns the temperature at its model's own terrain height
+for a grid cell a few kilometres across; on a mountainside that can be a
+thousand metres below the wrist, which by the standard lapse rate is some 6 °C
+warmer than the air actually around the meter. Open-Meteo takes an
+**elevation** and downscales to it — the fix's altitude when the reading has
+one, its own 90-metre elevation model at that coordinate when it does not. It
+also needs no entitlement, no App Service and no signing step, and no key for
+a non-commercial app. The coordinate, height and time go to a third party
+rather than to Apple, and Open-Meteo says request coordinates may sit in its
+server logs for up to 90 days. Weather data by Open-Meteo.com, CC BY 4.0.
+
+**Indoors, none of this applies.** The effect is the strip's temperature, and
+a strip indoors is at room temperature whatever the weather — so the
+adjustment is shown only for readings taken outside, and the app has to
+decide which those are. The indoor error is small in the article's own terms:
+a room at 28 °C or 19 °C is half a mmol/L off the meter's assumed 22.5 °C,
+inside the meter's own accuracy band; 0 °C is two mmol/L. So the reading on
+the watch carries an **inside / outside badge**, and the adjustment follows
+it.
+
+The badge starts at what the wrist can tell on its own, offline: the motion
+coprocessor's record of the last quarter hour. **Cycling or running means
+outside**, whether or not a workout was recorded. Walking and standing still
+say nothing, and the badge then starts at inside. To flip it, without
+touching the screen — gloves, rain, a meter in the other hand:
+
+- **Press the Action Button again.** Assigned to the app's Shortcut (setup
+  step 7), every press runs the app's intent: the first opens the dial, the
+  next, with a reading on screen, flips the badge. A press with a dose on
+  screen does nothing. The three-second save timer restarts on a flip so the
+  result can be seen.
+- **Double Tap** — index finger and thumb, twice — on an Ultra 2 or Series 9
+  and later, where the badge is the app's primary action.
+- Or tap the badge, if a finger is free.
+
+The checkmark screen keeps the badge too, and a flip there rewrites the
+reading just saved and holds the screen a little longer — for the glance that
+comes a moment too late.
+
+**What the badge shows when the reading saves is the truth**, flipped or
+let stand: the person saw it. It is stored with the reading, the phone never
+recomputes it, and the switch in the phone's editor is the only thing that
+changes it afterwards. Everything below decides only where the badge
+**starts**, in order of how much each witness knows:
+
+1. **The place.** Every flip is a lesson about where it was made. A reading
+   within 150 metres of a spot flipped to inside at least three times more
+   often than outside starts at inside, whatever else is going on — the
+   kitchen at the end of a ride is still the kitchen. Three, not one: one
+   flip is a flip. Only flips teach: a starting position merely let stand
+   does not, so three mornings at the kitchen table do not by themselves
+   make a place. Outside flips at the same spot count against, so a garden
+   that keeps being flipped the other way does not become the house. Nothing
+   is stored beyond the readings themselves, so the watch and the phone learn
+   the same places from the same log.
+2. **Health's workouts**, which know their kind and whether they were indoors,
+   for a reading typed on the phone. A reading during one, or in the quarter
+   hour after it ends while the meter is still cold from the pocket, goes
+   with it. The Workout app says outright for the kinds that come in both
+   flavours — Indoor Cycle against Outdoor Cycle, a treadmill against the
+   road — and swims say pool or open water. Otherwise the kind decides:
+   hiking, paddling, sailing, surfing, the snow sports, golf, fishing,
+   hunting, riding, and the field sports are outside; the gym, the court, the
+   rink and everything else that might be either are treated as inside. The
+   watch does not have Health's workouts, so on the wrist a hike starts at
+   inside and is one press away.
+3. **The wrist**, which saw cycling or running just before.
+
+With none of them, indoors. The phone's editor has a **Taken outdoors**
+switch for the reading whose badge was wrong after all; what it is set to is
+final, and a switch moved by hand teaches a place like a flip does. The
+temperature is looked up for every stamped reading regardless, so flipping
+either switch shows it at once.
+
+Readings added by hand on the phone carry no location and get no temperature.
+
+**Altitude comes from the barometer** where the watch has one, which gives
+absolute altitude to a few metres in a second or two; a watch without one
+uses the fix's GPS height, good to a few tens of metres, and stores nothing
+when the fix cannot vouch for it. Either is nothing against a lapse rate of
+6.5 °C per thousand. With no altitude the lookup falls back to the elevation
+model.
+
+**Altitude comes from the barometer** where the watch has one, which gives
+absolute altitude to a few metres in a second or two; a watch without one
+uses the fix's GPS height, good to a few tens of metres, and stores nothing
+when the fix cannot vouch for it. Either is nothing against a lapse rate of
+6.5 °C per thousand. With no altitude the lookup falls back to the elevation
+model.
 
 ## Averages
 
@@ -523,7 +659,8 @@ Pages, in order:
    and above range, basal, bolus, total, number of boluses, workout minutes,
    active energy, weight. A dash is a day with nothing recorded.
 6. **Every dose, reading and workout** (optional). Each injection, finger-prick
-   reading and workout in time order, two columns to a page. Off by default.
+   reading — with the outside temperature and the adjusted value where known —
+   and workout in time order, two columns to a page. Off by default.
 
 ### Insulin acting through the day
 

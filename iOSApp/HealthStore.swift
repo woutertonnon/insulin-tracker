@@ -23,6 +23,8 @@ final class HealthStore: ObservableObject {
         /// Active energy Health attributes to this workout, in kcal. Nil when
         /// the workout was recorded without it — a manually added entry, say.
         let kilocalories: Double?
+        /// Which side of the door — see `isOutdoors(_:)`.
+        let outdoors: Bool
 
         var duration: TimeInterval { end.timeIntervalSince(start) }
 
@@ -178,7 +180,8 @@ final class HealthStore: ObservableObject {
                     name: Self.name(for: $0.workoutActivityType),
                     kilocalories: $0.statistics(for: HKQuantityType(.activeEnergyBurned))?
                         .sumQuantity()?
-                        .doubleValue(for: .kilocalorie()))
+                        .doubleValue(for: .kilocalorie()),
+                    outdoors: Self.isOutdoors($0))
         }
     }
 
@@ -274,6 +277,46 @@ final class HealthStore: ObservableObject {
         glucoseUnitLabel.contains("mol")
             ? String(format: "%.1f", sample.value)
             : String(Int(sample.value.rounded()))
+    }
+
+    // MARK: - Indoors or out
+
+    /// Whether a workout happened outside, which decides whether a finger-
+    /// prick reading taken during it is adjusted for the weather.
+    ///
+    /// The Workout app says so outright for the kinds that come in both
+    /// flavours — Indoor Cycle against Outdoor Cycle, treadmill against the
+    /// road — and that word is taken first. Swims say pool or open water.
+    /// Otherwise the kind decides: the ones that only happen outside are
+    /// outside, and everything else — the gym, the court, the rink, which
+    /// might be either — is treated as inside, where being wrong costs least.
+    private static func isOutdoors(_ workout: HKWorkout) -> Bool {
+        if let indoor = workout.metadata?[HKMetadataKeyIndoorWorkout] as? Bool {
+            return !indoor
+        }
+        switch workout.workoutActivityType {
+        case .swimming:
+            guard let raw = workout.metadata?[HKMetadataKeySwimmingLocationType] as? NSNumber,
+                  let location = HKWorkoutSwimmingLocationType(rawValue: raw.intValue) else { return false }
+            return location == .openWater
+        case .running, .walking, .cycling, .wheelchairRunPace, .wheelchairWalkPace,
+             .hiking, .trackAndField,
+             .paddleSports, .sailing, .surfingSports, .waterSports,
+             .snowSports, .downhillSkiing, .crossCountrySkiing, .snowboarding,
+             .golf, .fishing, .hunting, .equestrianSports, .discSports,
+             .soccer, .rugby, .americanFootball, .australianFootball,
+             .baseball, .softball, .lacrosse, .cricket:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// The workouts as the temperature rule wants them.
+    var outings: [Temperature.Outing] {
+        workouts.compactMap {
+            $0.start <= $0.end ? Temperature.Outing(span: $0.start...$0.end, outdoors: $0.outdoors) : nil
+        }
     }
 
     // MARK: - Activity names

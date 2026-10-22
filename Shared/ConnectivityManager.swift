@@ -62,14 +62,36 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     /// Push an added or edited entry to the counterpart device.
     @MainActor
     func send(_ entry: LogEntry) {
-        transfer([
+        var payload: [String: Any] = [
             Op.key: Op.upsert,
             "id": entry.id.uuidString,
             "timestamp": entry.timestamp.timeIntervalSince1970,
             "kind": entry.kind.rawValue,
             "amount": entry.amount,
             Self.snapshotKey: currentBolusSnapshot(),
-        ])
+        ]
+        // Only when known: an absent key must leave the receiver's value as
+        // it is, since the phone fills in the temperature the watch never has.
+        if let latitude = entry.latitude, let longitude = entry.longitude {
+            payload["latitude"] = latitude
+            payload["longitude"] = longitude
+        }
+        if let altitude = entry.altitude {
+            payload["altitude"] = altitude
+        }
+        if let temperature = entry.temperature {
+            payload["temperature"] = temperature
+        }
+        if let outdoors = entry.outdoors {
+            payload["outdoors"] = outdoors
+        }
+        if let chosen = entry.chosen {
+            payload["chosen"] = chosen
+        }
+        if let moving = entry.moving {
+            payload["moving"] = moving
+        }
+        transfer(payload)
     }
 
     /// Push a deletion. Sent by id because the row is already gone locally.
@@ -298,16 +320,48 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
             else { return }
 
             let date = Date(timeIntervalSince1970: ts)
+            let entry: LogEntry
             if let existing {
                 existing.amount = amount
                 existing.timestamp = date
                 existing.kindRaw = kind.rawValue
+                entry = existing
             } else {
-                context.insert(LogEntry(id: id, timestamp: date, kind: kind, amount: amount))
+                entry = LogEntry(id: id, timestamp: date, kind: kind, amount: amount)
+                context.insert(entry)
+            }
+            if let latitude = userInfo["latitude"] as? Double,
+               let longitude = userInfo["longitude"] as? Double {
+                entry.latitude = latitude
+                entry.longitude = longitude
+            }
+            if let altitude = userInfo["altitude"] as? Double {
+                entry.altitude = altitude
+            }
+            if let temperature = userInfo["temperature"] as? Double {
+                entry.temperature = temperature
+            }
+            if let outdoors = userInfo["outdoors"] as? Bool {
+                entry.outdoors = outdoors
+            }
+            if let chosen = userInfo["chosen"] as? Bool {
+                entry.chosen = chosen
+            }
+            if let moving = userInfo["moving"] as? Bool {
+                entry.moving = moving
             }
         }
 
         try? context.save()
+
+        #if os(iOS)
+        // A reading with a location has just arrived; the phone is the one
+        // with a connection, so look its temperature up now rather than at
+        // the next quarter-hour.
+        if op == Op.upsert, userInfo["latitude"] != nil, userInfo["temperature"] == nil {
+            await WeatherBackfill.run(in: context, force: true)
+        }
+        #endif
 
         #if os(watchOS)
         // The complication reads its doses from the App Group, not from

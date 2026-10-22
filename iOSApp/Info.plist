@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Records where a blood sugar reading was taken, so the outside temperature at that moment can be looked up for it afterwards. The lookup sends that coordinate, height and time to Open-Meteo, a free weather service; nothing else leaves your devices.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Reads your workouts, glucose, active energy and weight so they can be charted alongside your insulin doses. Nothing is written back to Health, and nothing leaves your devices.</string>
 	<key>NSHealthUpdateUsageDescription</key>
