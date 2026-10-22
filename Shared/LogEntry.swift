@@ -3,49 +3,14 @@ import SwiftData
 
 /// The things we track.
 ///
-/// * `carbs`   — grams, when you know the number
-/// * `meal`    — a meal *size* when you don't (see `MealSize`); no gram amount
+/// * `glucose` — a finger-prick reading, stored in mmol/L whatever unit it
+///               was dialled in (see `GlucoseUnit`)
 /// * `insulin` — rapid-acting bolus units; the only kind that feeds IOB
 /// * `basal`   — long-acting background insulin units; excluded from IOB
 enum EntryKind: String, Codable, Sendable, CaseIterable {
-    case carbs
-    case meal
+    case glucose
     case insulin
     case basal
-}
-
-/// Qualitative meal sizes, for when the carb count isn't known. Stored in
-/// `LogEntry.amount` as the raw ordinal — deliberately *not* a gram estimate,
-/// so nothing invented ever ends up in the history.
-enum MealSize: Int, Codable, Sendable, CaseIterable, Identifiable {
-    case snack = 1
-    case small = 2
-    case medium = 3
-    case large = 4
-    case veryLarge = 5
-
-    var id: Int { rawValue }
-
-    var label: String {
-        switch self {
-        case .snack: return "Snack"
-        case .small: return "Small meal"
-        case .medium: return "Medium meal"
-        case .large: return "Large meal"
-        case .veryLarge: return "Very large meal"
-        }
-    }
-
-    /// Short form for the cramped watch dial.
-    var shortLabel: String {
-        switch self {
-        case .snack: return "Snack"
-        case .small: return "Small"
-        case .medium: return "Medium"
-        case .large: return "Large"
-        case .veryLarge: return "Very large"
-        }
-    }
 }
 
 /// A single logged event, stored locally with SwiftData on each device.
@@ -56,8 +21,7 @@ final class LogEntry {
     var timestamp: Date
     /// Stored as a String because SwiftData persists primitives most reliably.
     var kindRaw: String
-    /// Grams for `carbs`, units for `insulin`/`basal`, and the `MealSize`
-    /// ordinal for `meal`.
+    /// mmol/L for `glucose`, units for `insulin` and `basal`.
     var amount: Double
 
     init(id: UUID = UUID(), timestamp: Date, kind: EntryKind, amount: Double) {
@@ -67,23 +31,18 @@ final class LogEntry {
         self.amount = amount
     }
 
+    /// Falls back to a reading rather than a dose: a row of a kind this build
+    /// does not know must never be mistaken for insulin and fed to the IOB
+    /// maths. `purgeRetiredKinds` removes such rows at launch anyway.
     var kind: EntryKind {
-        EntryKind(rawValue: kindRaw) ?? .carbs
+        EntryKind(rawValue: kindRaw) ?? .glucose
     }
 
-    /// The meal size, for `.meal` entries only.
-    var mealSize: MealSize? {
-        guard kind == .meal else { return nil }
-        return MealSize(rawValue: Int(amount))
-    }
-
-    /// Human-readable amount, e.g. "30 g", "2.5 U", "Medium meal".
-    var displayAmount: String {
+    /// Human-readable amount, e.g. "5.6 mmol/L", "2.5 U", "24 U".
+    func displayAmount(in unit: GlucoseUnit) -> String {
         switch kind {
-        case .carbs:
-            return "\(Int(amount)) g"
-        case .meal:
-            return mealSize?.label ?? "Meal"
+        case .glucose:
+            return "\(unit.format(amount)) \(unit.label)"
         case .insulin:
             // Show one decimal place, dropping a trailing ".0" (e.g. "3 U", "2.5 U").
             let s = amount == amount.rounded() ? String(Int(amount)) : String(format: "%.1f", amount)
@@ -91,5 +50,19 @@ final class LogEntry {
         case .basal:
             return "\(Int(amount)) U"
         }
+    }
+
+    /// Delete rows whose kind this build no longer has — the carbohydrate and
+    /// meal-size entries of earlier versions. Run once at launch on each
+    /// device. Fetched whole and narrowed in Swift rather than through a
+    /// predicate, so a predicate failing at runtime cannot quietly delete the
+    /// wrong rows.
+    @MainActor
+    static func purgeRetiredKinds(in context: ModelContext) {
+        let all = (try? context.fetch(FetchDescriptor<LogEntry>())) ?? []
+        let retired = all.filter { EntryKind(rawValue: $0.kindRaw) == nil }
+        guard !retired.isEmpty else { return }
+        for row in retired { context.delete(row) }
+        try? context.save()
     }
 }

@@ -24,8 +24,8 @@ struct HistoryView: View {
     /// How far back Health is queried.
     ///
     /// Driven by the longest averaging window, not the chart's: the chart needs
-    /// eight hours, the carb ratio four weeks, and the long-run averages and
-    /// the trends charts three months.
+    /// eight hours, and the long-run averages and the trends charts three
+    /// months.
     ///
     /// The doctor's report covers whole days ending yesterday, so its ninety
     /// days start up to a day before a window measured back from the clock.
@@ -33,16 +33,16 @@ struct HistoryView: View {
         min(now.addingTimeInterval(-InsulinStats.longestWindow), Report.queryStart(now: now))
     }
 
-    /// Glucose from the carb-ratio window only.
-    ///
-    /// `CarbRatio` sorts whatever it is handed, and it only ever looks at meals
-    /// from the last four weeks — so handing it three months of readings would
-    /// sort tens of thousands of points every tick to reach the same answer.
-    private var carbRatioGlucose: [CarbRatio.GlucosePoint] {
-        let since = now.addingTimeInterval(-CarbRatio.window)
-        return health.glucose
-            .filter { $0.date > since }
-            .map { .init(date: $0.date, value: $0.value) }
+    /// How far back workouts are listed in the history. Health is queried
+    /// three months back for the charts, but three months of workout rows
+    /// interleaved with the log would be a side effect of a chart, not a
+    /// decision anyone made about this list.
+    private static let listedWorkoutWindow: TimeInterval = 28 * 24 * 3600
+
+    /// Finger-prick readings, drawn as dots on the glucose card so a meter
+    /// check sits on the same chart as the sensor it was checking.
+    private var fingerReadings: [LogEntry] {
+        entries.filter { $0.kind == .glucose }
     }
 
     /// Rapid-acting boluses relevant to the chart at `date`. Basal is excluded —
@@ -58,34 +58,10 @@ struct HistoryView: View {
             .map { InsulinMath.Dose(units: $0.amount, date: $0.timestamp) }
     }
 
-    /// The 7-day carb-ratio estimate.
-    ///
-    /// Meals logged by size carry no gram figure, so they are passed through as
-    /// `mealWithoutAmount` and counted as rejected rather than guessed at.
-    private var carbRatio: CarbRatio.Estimate {
-        let events: [CarbRatio.Event] = entries.compactMap { entry in
-            let kind: CarbRatio.Event.Kind
-            switch entry.kind {
-            case .insulin: kind = .bolus
-            case .basal: kind = .basal
-            case .carbs: kind = .carbsInGrams
-            case .meal: kind = .mealWithoutAmount
-            }
-            return CarbRatio.Event(date: entry.timestamp, kind: kind, amount: entry.amount)
-        }
-
-        return CarbRatio.estimate(
-            events: events,
-            glucose: carbRatioGlucose,
-            exclusions: health.workouts.map { .init(start: $0.start, end: $0.end) },
-            now: now
-        )
-    }
-
     /// Glucose and insulin averaged over 3, 7, 30 and 90 days.
     ///
-    /// Only injections feed this — carbs and meal sizes say nothing about how
-    /// much insulin a day took. Unlike the other readouts it does not depend on
+    /// Only injections feed this — a reading says nothing about how much
+    /// insulin a day took. Unlike the other readouts it does not depend on
     /// `now`: every window ends at the newest glucose reading instead, so the
     /// minute ticker does not recompute it.
     private var insulinStats: InsulinStats.Summary {
@@ -95,7 +71,7 @@ struct HistoryView: View {
                 return InsulinStats.Dose(date: entry.timestamp, units: entry.amount, isBasal: false)
             case .basal:
                 return InsulinStats.Dose(date: entry.timestamp, units: entry.amount, isBasal: true)
-            case .carbs, .meal: return nil
+            case .glucose: return nil
             }
         }
 
@@ -116,7 +92,7 @@ struct HistoryView: View {
                 return DailySeries.Dose(date: entry.timestamp, units: entry.amount, isBasal: false)
             case .basal:
                 return DailySeries.Dose(date: entry.timestamp, units: entry.amount, isBasal: true)
-            case .carbs, .meal:
+            case .glucose:
                 return nil
             }
         }
@@ -171,13 +147,11 @@ struct HistoryView: View {
 
                         if let latest = health.latestGlucose {
                             Section("Glucose") {
-                                GlucoseCard(health: health, latest: latest, now: now)
+                                GlucoseCard(health: health,
+                                            latest: latest,
+                                            readings: fingerReadings,
+                                            now: now)
                             }
-                        }
-
-                        Section("Carb ratio · last 28 days") {
-                            CarbRatioCard(estimate: carbRatio,
-                                          glucoseUnit: health.glucoseUnitLabel)
                         }
 
                         Section("Averages") {
@@ -193,7 +167,7 @@ struct HistoryView: View {
                                         Button {
                                             editingEntry = entry
                                         } label: {
-                                            EntryRow(entry: entry)
+                                            EntryRow(entry: entry, unit: health.glucoseUnitPreference)
                                         }
                                         .buttonStyle(.plain)
                                         .swipeActions(edge: .trailing) {
@@ -251,16 +225,16 @@ struct HistoryView: View {
                                weightUnit: health.weightUnitLabel,
                                weightPadding: health.weightAxisPadding)
                 case .report:
-                    ReportView(entries: entries, health: health, carbRatio: carbRatio)
+                    ReportView(entries: entries, health: health)
                 case .settings:
                     SettingsView()
                 }
             }
             .sheet(item: $editingEntry) { entry in
-                EntryEditView(entry: entry)
+                EntryEditView(entry: entry, unit: health.glucoseUnitPreference)
             }
             .sheet(isPresented: $addingNew) {
-                EntryEditView(entry: nil)
+                EntryEditView(entry: nil, unit: health.glucoseUnitPreference)
             }
             .onReceive(ticker) { instant in
                 now = instant
@@ -320,12 +294,8 @@ struct HistoryView: View {
 
     private var groupedByDay: [DayGroup] {
         let cal = Calendar.current
-        // Health is queried three months back for the trends charts, but the
-        // list keeps the span it always had — three months of workout rows
-        // interleaved with the log would be a side effect of a chart, not a
-        // decision anyone made about this list.
         let listedWorkouts = health.workouts.filter {
-            $0.start > now.addingTimeInterval(-CarbRatio.window)
+            $0.start > now.addingTimeInterval(-Self.listedWorkoutWindow)
         }
         let items = entries.map(HistoryItem.entry) + listedWorkouts.map(HistoryItem.workout)
         let grouped = Dictionary(grouping: items) { cal.startOfDay(for: $0.date) }
@@ -349,8 +319,7 @@ struct HistoryView: View {
 extension EntryKind {
     var symbolName: String {
         switch self {
-        case .carbs: return "fork.knife"
-        case .meal: return "fork.knife.circle"
+        case .glucose: return "drop.fill"
         case .insulin: return "syringe"
         case .basal: return "syringe"
         }
@@ -358,7 +327,7 @@ extension EntryKind {
 
     var tint: Color {
         switch self {
-        case .carbs, .meal: return .orange
+        case .glucose: return .pink
         case .insulin: return .blue
         case .basal: return .indigo
         }
@@ -366,8 +335,7 @@ extension EntryKind {
 
     var title: String {
         switch self {
-        case .carbs: return "Carbs"
-        case .meal: return "Meal"
+        case .glucose: return "Blood sugar"
         case .insulin: return "Insulin"
         case .basal: return "Basal"
         }
@@ -376,6 +344,7 @@ extension EntryKind {
 
 private struct EntryRow: View {
     let entry: LogEntry
+    let unit: GlucoseUnit
 
     var body: some View {
         HStack(spacing: 12) {
@@ -391,7 +360,7 @@ private struct EntryRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text(entry.displayAmount)
+            Text(entry.displayAmount(in: unit))
                 .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(entry.kind.tint)
             Image(systemName: "chevron.right")
@@ -431,31 +400,45 @@ private struct WorkoutRow: View {
 }
 
 /// Add (entry == nil) or edit an existing entry: kind, amount, and time.
+///
+/// Blood sugar is taken in the unit Health is in and stored in mmol/L, the
+/// conversion happening at the edges of this view and nowhere else.
 private struct EntryEditView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
     let entry: LogEntry?
+    /// The unit readings are shown and typed in.
+    let unit: GlucoseUnit
 
     @State private var kind: EntryKind
+    /// In the unit on screen — mmol/L or mg/dL for a reading, units for a dose.
     @State private var amount: Double
-    @State private var mealSize: MealSize
     @State private var timestamp: Date
 
-    init(entry: LogEntry?) {
+    init(entry: LogEntry?, unit: GlucoseUnit) {
         self.entry = entry
-        _kind = State(initialValue: entry?.kind ?? .carbs)
-        _amount = State(initialValue: entry?.amount ?? 0)
-        _mealSize = State(initialValue: entry?.mealSize ?? .medium)
+        self.unit = unit
+        let kind = entry?.kind ?? .glucose
+        _kind = State(initialValue: kind)
+        _amount = State(initialValue: Self.shown(entry?.amount ?? 0, as: kind, in: unit))
         _timestamp = State(initialValue: entry?.timestamp ?? .now)
     }
 
     private var isNew: Bool { entry == nil }
-    private var unitLabel: String { kind == .carbs ? "g" : "U" }
-    private var stepSize: Double { kind == .insulin ? 0.5 : 1 }
+    private var unitLabel: String { kind == .glucose ? unit.label : "U" }
 
-    /// A meal has no number attached — only a size.
-    private var isMeal: Bool { kind == .meal }
+    private var stepSize: Double {
+        switch kind {
+        case .glucose: return unit.step
+        case .insulin: return 0.5
+        case .basal: return 1
+        }
+    }
+
+    private var amountTitle: String {
+        kind == .glucose ? "Reading (\(unit.label))" : "Amount (units)"
+    }
 
     var body: some View {
         NavigationStack {
@@ -469,27 +452,15 @@ private struct EntryEditView: View {
                     .pickerStyle(.segmented)
                 }
 
-                if isMeal {
-                    Section("Meal size") {
-                        Picker("Size", selection: $mealSize) {
-                            ForEach(MealSize.allCases) { size in
-                                Text(size.label).tag(size)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
+                Section(amountTitle) {
+                    HStack {
+                        TextField("Amount", value: $amount, format: .number)
+                            .keyboardType(.decimalPad)
+                        Text(unitLabel)
+                            .foregroundStyle(.secondary)
                     }
-                } else {
-                    Section("Amount (\(kind == .carbs ? "grams" : "units"))") {
-                        HStack {
-                            TextField("Amount", value: $amount, format: .number)
-                                .keyboardType(.decimalPad)
-                            Text(unitLabel)
-                                .foregroundStyle(.secondary)
-                        }
-                        Stepper(value: $amount, in: 0...1000, step: stepSize) {
-                            Text("Adjust")
-                        }
+                    Stepper(value: $amount, in: 0...1000, step: stepSize) {
+                        Text("Adjust")
                     }
                 }
 
@@ -516,24 +487,29 @@ private struct EntryEditView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }
-                        .disabled(!isMeal && amount <= 0)
+                        .disabled(amount <= 0)
                 }
             }
             .onChange(of: kind) { _, newKind in
-                // Snap bolus insulin to a clean 0.5 grid when switching type;
-                // carbs and basal are whole numbers.
+                // Snap to the grid of the new kind: a bolus to 0.5 U, basal to
+                // whole units, a reading to the unit's own precision.
                 switch newKind {
                 case .insulin: amount = (amount * 2).rounded() / 2
-                case .carbs, .basal: amount = amount.rounded()
-                case .meal: break
+                case .basal: amount = amount.rounded()
+                case .glucose: amount = (amount / unit.step).rounded() * unit.step
                 }
             }
         }
     }
 
+    /// A stored amount as it is shown: readings converted, doses as they are.
+    private static func shown(_ stored: Double, as kind: EntryKind, in unit: GlucoseUnit) -> Double {
+        kind == .glucose ? unit.display(stored) : stored
+    }
+
     private func save() {
-        // For meals the stored amount is the size ordinal, not a quantity.
-        let value = isMeal ? Double(mealSize.rawValue) : max(0, amount)
+        // Readings go back into mmol/L; doses are stored as typed.
+        let value = kind == .glucose ? unit.stored(max(0, amount)) : max(0, amount)
         let saved: LogEntry
         if let entry {
             entry.kindRaw = kind.rawValue

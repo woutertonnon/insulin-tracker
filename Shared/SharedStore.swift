@@ -15,6 +15,11 @@ enum SharedStore {
     /// WatchConnectivity — this is where the complication reads it.
     private static let basalReminderKey = "basalReminderMinuteOfDay"
 
+    /// The unit the dial takes blood sugar readings in, as the raw
+    /// `GlucoseUnit` string. The phone owns it — Health decides — and pushes
+    /// it over WatchConnectivity.
+    private static let glucoseUnitKey = GlucoseUnit.settingsKey
+
     /// When basal was last logged, as a Unix timestamp. The complication needs
     /// it to know today's dose has been taken; it feeds no insulin math, since
     /// long-acting insulin is not described by the curve in `InsulinMath`.
@@ -52,6 +57,18 @@ enum SharedStore {
     /// The most recent bolus, for the "last dose" line.
     static func lastBolus() -> InsulinMath.Dose? {
         bolusDoses().last
+    }
+
+    // MARK: - Glucose unit
+
+    static func setGlucoseUnit(_ unit: GlucoseUnit) {
+        defaults?.set(unit.rawValue, forKey: glucoseUnitKey)
+    }
+
+    /// mmol/L until the phone has said otherwise.
+    static func glucoseUnit() -> GlucoseUnit {
+        guard let d = defaults else { return .millimolesPerLitre }
+        return GlucoseUnit.current(d)
     }
 
     // MARK: - Basal reminder

@@ -3,10 +3,15 @@ import Charts
 
 /// One page of the doctor's report, at paper size.
 ///
-/// Printed, quite possibly in black and white, and read by someone who has
-/// never seen the app — so every figure carries its unit, every chart says in
-/// words what its bands and bars are, and nothing is said by colour alone.
-/// Type is small because a clinic reads this across a desk, not on a phone.
+/// Titles, labels, values, legends and numbered references — and nothing
+/// else. No explanatory prose: the page is read across a desk by someone who
+/// knows what time in range is, and every sentence would be between them and
+/// the number. Anything a caveat would have said is a label with a value
+/// beside it instead ("Days logged: 84 of 90"); anything a method note would
+/// have said is a reference.
+///
+/// Printed, quite possibly in black and white, so every multi-series chart
+/// carries a legend and every figure its unit.
 struct ReportPageView: View {
     let page: ReportPDF.Page
     let document: Report.Document
@@ -34,8 +39,10 @@ struct ReportPageView: View {
         switch page {
         case .summary:
             summary
-        case .charts:
-            charts
+        case .overTime:
+            overTime
+        case .movement:
+            movement
         case .notes:
             notes
         case .days(let days, let continued):
@@ -58,8 +65,8 @@ struct ReportPageView: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text("Generated \(Self.longDate.string(from: document.generated))")
-                Text("Glucose in \(document.unit)")
+                Text("Generated: \(Self.longDate.string(from: document.generated))")
+                Text("Glucose: \(document.unit)")
             }
             .font(.system(size: 8))
             .foregroundStyle(ReportStyle.secondary)
@@ -68,7 +75,6 @@ struct ReportPageView: View {
 
     private var footer: some View {
         HStack {
-            Text("Recorded by the patient with Insulin Tracker. Describes what happened; not a dosing recommendation.")
             Spacer()
             Text("Page \(number) of \(count)")
         }
@@ -77,45 +83,53 @@ struct ReportPageView: View {
         .padding(.top, 8)
     }
 
-    private func sectionTitle(_ title: String, detail: String? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title)
-                .font(.system(size: 12, weight: .bold))
-            if let detail {
-                Text(detail)
-                    .foregroundStyle(ReportStyle.secondary)
-            }
-        }
-        .padding(.top, 2)
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .bold))
+            .padding(.top, 2)
     }
 
-    private func emptyNote(_ text: String) -> some View {
+    private func chartTitle(_ title: String, unit: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+            Text(unit)
+                .foregroundStyle(ReportStyle.secondary)
+        }
+    }
+
+    private func tableHeader(_ text: String) -> some View {
         Text(text)
-            .italic()
+            .font(.system(size: 7.5, weight: .semibold))
             .foregroundStyle(ReportStyle.secondary)
     }
 
-    private func bullets(_ lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(lines, id: \.self) { line in
-                HStack(alignment: .top, spacing: 4) {
-                    Text("•")
-                    Text(line)
-                        .fixedSize(horizontal: false, vertical: true)
+    private func dash() -> some View {
+        Text("—")
+            .foregroundStyle(ReportStyle.muted)
+    }
+
+    /// "14-day average: 7.4 mmol/L · 30-day average: … · 90-day average: …"
+    private func averages(_ value: @escaping (Report.Window) -> String?) -> some View {
+        HStack(spacing: 8) {
+            ForEach(document.windows) { window in
+                HStack(spacing: 3) {
+                    Text("\(window.title):")
+                        .foregroundStyle(ReportStyle.secondary)
+                    Text(value(window) ?? "—")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded).monospacedDigit())
                 }
             }
         }
+        .font(.system(size: 8))
+        .lineLimit(1)
     }
 
     // MARK: - Page 1: summary
 
     private var summary: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Glucose from a continuous glucose monitor, via Apple Health. Insulin, carbohydrate and meals as logged by the patient on an Apple Watch at the time of each dose. Exercise and weight from Apple Health. No figure here has been reviewed by a clinician.")
-                .foregroundStyle(ReportStyle.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            sectionTitle("Glucose", detail: glucoseDetail)
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Glucose")
             if let glucose = document.glucose {
                 glucoseTiles(glucose)
                 HStack(alignment: .top, spacing: 16) {
@@ -125,30 +139,13 @@ struct ReportPageView: View {
                 }
                 profileChart
             } else {
-                emptyNote("No CGM readings in this period.")
+                dash()
             }
 
-            sectionTitle("Insulin and food", detail: insulinDetail)
+            sectionTitle("Insulin")
             insulinTiles
-
-            if !caveats.isEmpty {
-                sectionTitle("Read with")
-                bullets(caveats)
-                    .foregroundStyle(ReportStyle.secondary)
-            }
+            activityChart
         }
-    }
-
-    private var glucoseDetail: String? {
-        guard let glucose = document.glucose else { return nil }
-        return "\(glucose.count) readings · CGM active \(Report.formatPercent(glucose.coverage)) of the period"
-    }
-
-    private var insulinDetail: String {
-        let insulin = document.insulin
-        return insulin.loggedDays == document.days.count
-            ? "logged on all \(insulin.loggedDays) days"
-            : "the log covers \(insulin.loggedDays) of the \(document.days.count) days"
     }
 
     private func glucoseTiles(_ glucose: Report.GlucoseSummary) -> some View {
@@ -159,16 +156,16 @@ struct ReportPageView: View {
                      unit: unit)
             StatTile(title: "GMI",
                      value: A1c.gmi(fromMeanGlucose: glucose.mean, unit: unit).map(A1c.format) ?? "—",
-                     unit: "% · Bergenstal 2018")
+                     unit: "% [3]")
             StatTile(title: "Estimated A1c",
                      value: A1c.fromMeanGlucose(glucose.mean, unit: unit).map(A1c.format) ?? "—",
-                     unit: "% · ADAG 2008")
+                     unit: "% [4]")
             StatTile(title: "SD",
                      value: glucose.sd.map { InsulinStats.formatGlucose($0, unit: unit) } ?? "—",
                      unit: unit)
             StatTile(title: "CV",
                      value: glucose.cv.map { String(format: "%.0f", $0) } ?? "—",
-                     unit: "% · goal ≤ 36%")
+                     unit: "% · goal ≤ 36% [1]")
             StatTile(title: "CGM active",
                      value: Report.formatPercent(glucose.coverage),
                      unit: "of the period")
@@ -185,7 +182,7 @@ struct ReportPageView: View {
                 tableHeader(document.unit)
                 tableHeader("Time")
                 tableHeader("Per day")
-                tableHeader("Goal")
+                tableHeader("Goal [1]")
             }
             ForEach(Report.Band.allCases.reversed(), id: \.self) { band in
                 GridRow {
@@ -205,20 +202,21 @@ struct ReportPageView: View {
                         .foregroundStyle(ReportStyle.muted)
                 }
             }
-            GridRow {
-                Text("")
-                Text("Goals are the international consensus for most adults with type 1 or type 2 diabetes. Targets are individual.")
-                    .foregroundStyle(ReportStyle.muted)
-                    .font(.system(size: 7.5))
-                    .gridCellColumns(5)
-            }
         }
     }
 
-    private func tableHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 7.5, weight: .semibold))
-            .foregroundStyle(ReportStyle.secondary)
+    /// Axis marks for a 24-hour day, shared by the two profile charts.
+    private var hourAxis: some AxisContent {
+        AxisMarks(values: [0.0, 3, 6, 9, 12, 15, 18, 21, 24]) { value in
+            AxisGridLine().foregroundStyle(ReportStyle.grid)
+            AxisValueLabel {
+                if let hour = value.as(Double.self) {
+                    Text(String(format: "%02d:00", Int(hour)))
+                        .font(.system(size: 7))
+                        .foregroundStyle(ReportStyle.secondary)
+                }
+            }
+        }
     }
 
     /// The AGP's central chart: every reading folded onto one day.
@@ -226,15 +224,7 @@ struct ReportPageView: View {
         let bins = document.profilePlot
         let targets = document.targets
         return VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Daily profile")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("every reading in the period by time of day · dark line the median, mid band 25–75%, light band 5–95% · shaded strip the target range")
-                    .foregroundStyle(ReportStyle.secondary)
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-
+            chartTitle("Daily profile [2]", unit: document.unit)
             if bins.count >= 2 {
                 Chart {
                     RectangleMark(xStart: .value("Start", 0.0),
@@ -273,24 +263,13 @@ struct ReportPageView: View {
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 2]))
                 }
                 .chartForegroundStyleScale([
-                    "5–95%": ReportStyle.profileOuter,
-                    "25–75%": ReportStyle.profileInner,
                     "Median": ReportStyle.profileMedian,
+                    "25–75%": ReportStyle.profileInner,
+                    "5–95%": ReportStyle.profileOuter,
                 ])
-                .chartLegend(.hidden)
+                .chartLegend(position: .top, alignment: .leading, spacing: 2)
                 .chartXScale(domain: 0.0...24.0)
-                .chartXAxis {
-                    AxisMarks(values: [0.0, 3, 6, 9, 12, 15, 18, 21, 24]) { value in
-                        AxisGridLine().foregroundStyle(ReportStyle.grid)
-                        AxisValueLabel {
-                            if let hour = value.as(Double.self) {
-                                Text(String(format: "%02d:00", Int(hour)))
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(ReportStyle.secondary)
-                            }
-                        }
-                    }
-                }
+                .chartXAxis { hourAxis }
                 .chartYAxis {
                     AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { value in
                         AxisGridLine().foregroundStyle(ReportStyle.grid)
@@ -303,16 +282,16 @@ struct ReportPageView: View {
                         }
                     }
                 }
-                .frame(height: 170)
+                .font(.system(size: 7.5))
+                .frame(height: 130)
             } else {
-                emptyNote("Too few readings to draw a profile.")
+                dash()
             }
         }
     }
 
     private var insulinTiles: some View {
         let insulin = document.insulin
-        let food = document.food
         return HStack(spacing: 6) {
             StatTile(title: "Basal",
                      value: insulin.basalPerDay.map { String(format: "%.1f", $0) } ?? "—",
@@ -329,51 +308,99 @@ struct ReportPageView: View {
             StatTile(title: "Boluses",
                      value: insulin.bolusesPerDay.map { String(format: "%.1f", $0) } ?? "—",
                      unit: "per day")
-            StatTile(title: "Carbs logged",
-                     value: food.carbsPerLoggedDay.map { String(Int($0.rounded())) } ?? "—",
-                     unit: food.daysWithCarbs > 0 ? "g per day, on \(food.daysWithCarbs) days" : "g per day")
+            StatTile(title: "Days logged",
+                     value: "\(insulin.loggedDays) of \(document.days.count)",
+                     unit: "\(insulin.daysWithBasal) with basal")
         }
     }
 
-    /// Everything that makes a figure above mean less than it looks like it
-    /// means, said on the page rather than left for the clinic to notice.
-    private var caveats: [String] {
-        var notes: [String] = []
-        let insulin = document.insulin
-        let total = document.days.count
-
-        if insulin.loggedDays == 0 {
-            notes.append("No insulin or food was logged in this period, so the insulin figures are blank.")
-        } else if insulin.loggedDays < total {
-            notes.append("The log begins \(Self.mediumDate.string(from: document.days[total - insulin.loggedDays].date)); per-day insulin is divided by the \(insulin.loggedDays) days it covers, not by \(total).")
+    /// Units acting per hour through a typical day: basal under the Lantus
+    /// profile, bolus under the NovoRapid one, stacked.
+    private var activityChart: some View {
+        let bins = document.activityPlot
+        return VStack(alignment: .leading, spacing: 3) {
+            chartTitle("Insulin acting through the day [5] [6]", unit: "U per hour")
+            if bins.count >= 2 {
+                Chart {
+                    ForEach(bins) { bin in
+                        AreaMark(x: .value("Time", bin.hour), y: .value("U/h", bin.basal))
+                            .foregroundStyle(by: .value("Kind", "Basal"))
+                            .interpolationMethod(.monotone)
+                        AreaMark(x: .value("Time", bin.hour), y: .value("U/h", bin.bolus))
+                            .foregroundStyle(by: .value("Kind", "Bolus"))
+                            .interpolationMethod(.monotone)
+                    }
+                }
+                .chartForegroundStyleScale([
+                    "Basal": ReportStyle.basal,
+                    "Bolus": ReportStyle.bolus,
+                ])
+                .chartLegend(position: .top, alignment: .leading, spacing: 2)
+                .chartXScale(domain: 0.0...24.0)
+                .chartXAxis { hourAxis }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                        AxisGridLine().foregroundStyle(ReportStyle.grid)
+                        AxisValueLabel {
+                            Text(Self.axisLabel(value))
+                                .font(.system(size: 7))
+                                .foregroundStyle(ReportStyle.secondary)
+                        }
+                    }
+                }
+                .font(.system(size: 7.5))
+                .frame(height: 115)
+            } else {
+                dash()
+            }
         }
-        if insulin.basalGapDays > 0 {
-            notes.append("\(insulin.basalGapDays) of the \(insulin.loggedDays) logged days have no basal entry. A missed entry and a missed injection look the same here, and both lower the per-day figures.")
-        }
-        if let glucose = document.glucose, glucose.coverage < 0.8 {
-            notes.append("The CGM covered \(Report.formatPercent(glucose.coverage)) of the period; the glucose figures describe the covered part only.")
-        }
-        if document.food.mealsBySize > 0 {
-            notes.append("\(document.food.mealsBySize) meals were logged by size only (snack, small, medium…) and carry no gram figure, so carbohydrate per day understates what was eaten.")
-        }
-        return notes
     }
 
-    // MARK: - Page 2: day by day
+    // MARK: - Page 2: over time
 
-    private var charts: some View {
-        let chartCount = 2 + (document.hasCarbs ? 1 : 0) + (document.hasEnergy ? 1 : 0) + (document.hasWeight ? 1 : 0)
-        // Share the page between however many charts there are, within reason.
-        let available = ReportPDF.pageSize.height - 2 * ReportPDF.margin - 150
-        let height = min(150, available / CGFloat(chartCount) - 22)
+    private var overTime: some View {
+        let unit = document.unit
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Over time")
 
-        return VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Day by day", detail: "one mark per calendar day; a missing mark is a day with nothing recorded")
+            dayChart("Estimated A1c [4] and GMI [3]",
+                     unit: "%",
+                     height: 125,
+                     averages: { window in
+                         guard let mean = window.glucose?.mean else { return nil }
+                         let a1c = A1c.fromMeanGlucose(mean, unit: unit).map(A1c.format) ?? "—"
+                         let gmi = A1c.gmi(fromMeanGlucose: mean, unit: unit).map(A1c.format) ?? "—"
+                         return "A1c \(a1c)%, GMI \(gmi)%"
+                     }) {
+                ForEach(document.days) { day in
+                    if let mean = day.glucose?.mean {
+                        if let a1c = A1c.fromMeanGlucose(mean, unit: unit) {
+                            LineMark(x: .value("Day", plotX(day)), y: .value("A1c", a1c))
+                                .foregroundStyle(by: .value("Series", "Estimated A1c"))
+                                .lineStyle(StrokeStyle(lineWidth: 1.2))
+                                .interpolationMethod(.monotone)
+                        }
+                        if let gmi = A1c.gmi(fromMeanGlucose: mean, unit: unit) {
+                            LineMark(x: .value("Day", plotX(day)), y: .value("GMI", gmi))
+                                .foregroundStyle(by: .value("Series", "GMI"))
+                                .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [4, 2]))
+                                .interpolationMethod(.monotone)
+                        }
+                    }
+                }
+            }
+            .chartForegroundStyleScale([
+                "Estimated A1c": ReportStyle.a1c,
+                "GMI": ReportStyle.gmi,
+            ])
+            .chartLegend(position: .top, alignment: .leading, spacing: 2)
 
             dayChart("Mean glucose",
-                     unit: document.unit,
-                     note: "dashed lines at the edges of the target range",
-                     height: height) {
+                     unit: unit,
+                     height: 125,
+                     averages: { window in
+                         window.glucose.map { "\(InsulinStats.formatGlucose($0.mean, unit: unit)) \(unit)" }
+                     }) {
                 ForEach(document.days) { day in
                     if let glucose = day.glucose {
                         LineMark(x: .value("Day", plotX(day)), y: .value("Mean", glucose.mean))
@@ -395,8 +422,10 @@ struct ReportPageView: View {
 
             dayChart("Insulin",
                      unit: "U per day",
-                     note: "dark part basal, light part bolus",
-                     height: height) {
+                     height: 125,
+                     averages: { window in
+                         window.insulin.totalPerDay.map { String(format: "%.1f U", $0) }
+                     }) {
                 ForEach(document.days) { day in
                     if day.basal > 0 {
                         BarMark(x: .value("Day", day.date, unit: .day), y: .value("Units", day.basal))
@@ -412,26 +441,23 @@ struct ReportPageView: View {
                 "Basal": ReportStyle.basal,
                 "Bolus": ReportStyle.bolus,
             ])
+            .chartLegend(position: .top, alignment: .leading, spacing: 2)
+        }
+    }
 
-            if document.hasCarbs {
-                dayChart("Carbohydrate logged",
-                         unit: "g per day",
-                         note: "only meals entered in grams; meals logged by size carry no figure",
-                         height: height) {
-                    ForEach(document.days) { day in
-                        if let carbs = day.carbs {
-                            BarMark(x: .value("Day", day.date, unit: .day), y: .value("Grams", carbs))
-                                .foregroundStyle(ReportStyle.carbs)
-                        }
-                    }
-                }
-            }
+    // MARK: - Page 3: movement and weight
+
+    private var movement: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Activity and weight")
 
             if document.hasEnergy {
                 dayChart("Active energy",
                          unit: "kcal per day",
-                         note: "all movement, from Apple Health; the dark part was inside a recorded workout",
-                         height: height) {
+                         height: 200,
+                         averages: { window in
+                             window.activeEnergyPerDay.map { "\(Int($0.rounded())) kcal" }
+                         }) {
                     ForEach(document.days) { day in
                         if let energy = day.activeEnergy {
                             let workout = min(energy, day.workouts.reduce(0.0) { $0 + ($1.kilocalories ?? 0) })
@@ -441,23 +467,26 @@ struct ReportPageView: View {
                             }
                             if energy - workout > 0 {
                                 BarMark(x: .value("Day", day.date, unit: .day), y: .value("kcal", energy - workout))
-                                    .foregroundStyle(by: .value("Source", "Other"))
+                                    .foregroundStyle(by: .value("Source", "Other activity"))
                             }
                         }
                     }
                 }
                 .chartForegroundStyleScale([
                     "Workouts": ReportStyle.workout,
-                    "Other": ReportStyle.otherActivity,
+                    "Other activity": ReportStyle.otherActivity,
                 ])
+                .chartLegend(position: .top, alignment: .leading, spacing: 2)
             }
 
             if document.hasWeight {
                 dayChart("Weight",
                          unit: document.weightUnit,
-                         note: "dots on the days it was recorded; the line between them is interpolation",
-                         height: height,
-                         yDomain: weightDomain) {
+                         height: 200,
+                         yDomain: weightDomain,
+                         averages: { window in
+                             window.weight.map { "\(String(format: "%.1f", $0)) \(document.weightUnit)" }
+                         }) {
                     ForEach(document.days) { day in
                         if let weight = day.weight {
                             LineMark(x: .value("Day", plotX(day)), y: .value("Weight", weight))
@@ -474,19 +503,19 @@ struct ReportPageView: View {
         }
     }
 
+    /// Title, the three window averages, and a chart over the period's days.
     private func dayChart<Content: ChartContent>(
         _ title: String,
         unit: String,
-        note: String,
         height: CGFloat,
         yDomain: ClosedRange<Double>? = nil,
+        averages value: @escaping (Report.Window) -> String?,
         @ChartContentBuilder content: () -> Content
     ) -> some View {
         let chart = Chart {
             content()
         }
         .chartXScale(domain: document.start...document.end)
-        .chartLegend(.hidden)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 8)) { _ in
                 AxisGridLine().foregroundStyle(ReportStyle.grid)
@@ -508,20 +537,12 @@ struct ReportPageView: View {
                 }
             }
         }
+        .font(.system(size: 7.5))
         .frame(height: height)
 
         return VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(unit)
-                    .foregroundStyle(ReportStyle.secondary)
-                Text("· \(note)")
-                    .foregroundStyle(ReportStyle.muted)
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-
+            chartTitle(title, unit: unit)
+            averages(value)
             if let yDomain {
                 chart.chartYScale(domain: yDomain)
             } else {
@@ -548,118 +569,64 @@ struct ReportPageView: View {
         return (low - document.weightAxisPadding)...(high + document.weightAxisPadding)
     }
 
-    // MARK: - Page 3: notes
+    // MARK: - Page 4: basal and references
 
     private var notes: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Basal")
-            Text(basalText)
-                .fixedSize(horizontal: false, vertical: true)
+            basalTiles
 
-            sectionTitle("Insulin-to-carb ratio", detail: "last 28 days, measured from logged meals — the app's own estimate")
-            carbRatioBlock
-
-            sectionTitle("How the figures were made")
-            bullets(definitions)
-
-            sectionTitle("Limits")
-            bullets(limits)
-        }
-    }
-
-    private var basalText: String {
-        let insulin = document.insulin
-        guard insulin.daysWithBasal > 0, let dose = insulin.basalDose else {
-            return "No long-acting insulin was logged in this period."
-        }
-        var text = "Long-acting insulin was logged on \(insulin.daysWithBasal) of \(insulin.loggedDays) days"
-        if insulin.basalGapDays > 0 {
-            text += " — \(insulin.basalGapDays) without an entry"
-        }
-        text += ". The usual dose was \(Report.formatUnits(dose)) U"
-        if let range = insulin.basalDoseRange, range.lowerBound != range.upperBound {
-            text += " (from \(Report.formatUnits(range.lowerBound)) to \(Report.formatUnits(range.upperBound)))"
-        }
-        if let minute = insulin.basalMinuteOfDay {
-            text += ", typically around \(Report.formatMinuteOfDay(minute))"
-        }
-        text += "."
-        return text
-    }
-
-    @ViewBuilder
-    private var carbRatioBlock: some View {
-        if let estimate = document.carbRatio, let isf = estimate.isf {
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
-                GridRow {
-                    Text("")
-                    tableHeader("No exercise")
-                    tableHeader("With exercise")
-                }
-                ForEach(CarbRatio.Daypart.allCases, id: \.self) { part in
-                    GridRow {
-                        Text(part.rawValue)
-                            .foregroundStyle(ReportStyle.secondary)
-                        carbRatioCell(estimate, part: part, exercise: false)
-                        carbRatioCell(estimate, part: part, exercise: true)
+            sectionTitle("References")
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(Self.references.indices, id: \.self) { index in
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("[\(index + 1)]")
+                            .frame(width: 16, alignment: .leading)
+                        Text(Self.references[index])
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 3) {
-                if let pooled = estimate.pooled {
-                    Text("All meals together: \(CarbRatio.format(pooled)).")
-                }
-                Text("Sensitivity measured from \(estimate.isfSampleCount) correction dose\(estimate.isfSampleCount == 1 ? "" : "s") taken with no food near them: 1 U moved glucose by about \(String(format: "%.1f", isf)) \(document.unit).")
-                Text("Morning 04:00–11:00, lunch 11:00–17:00, dinner 17:00–04:00. Each figure is the median over its meals, from glucose at the meal against four hours later, with the miss converted into the insulin that was missing. Cells with fewer than \(CarbRatio.minimumEpisodes) meals are left blank.")
-                    .foregroundStyle(ReportStyle.secondary)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        } else {
-            emptyNote("Not enough clean correction doses in the last 28 days to measure sensitivity, so no ratio could be derived.")
+            .font(.system(size: 8))
+            .foregroundStyle(ReportStyle.secondary)
         }
     }
 
-    private func carbRatioCell(_ estimate: CarbRatio.Estimate,
-                               part: CarbRatio.Daypart,
-                               exercise: Bool) -> some View {
-        let cell = estimate.cells.first { $0.daypart == part && $0.withExercise == exercise }
-        return HStack(alignment: .firstTextBaseline, spacing: 4) {
-            if let ratio = cell?.ratio {
-                Text(CarbRatio.format(ratio))
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                Text("\(cell?.episodeCount ?? 0) meals")
-                    .foregroundStyle(ReportStyle.muted)
-            } else {
-                Text("—")
-                    .foregroundStyle(ReportStyle.muted)
-                Text("\(cell?.episodeCount ?? 0) of \(CarbRatio.minimumEpisodes) meals")
-                    .foregroundStyle(ReportStyle.muted)
-            }
+    private var basalTiles: some View {
+        let insulin = document.insulin
+        var range = "—"
+        if let bounds = insulin.basalDoseRange {
+            range = bounds.lowerBound == bounds.upperBound
+                ? Report.formatUnits(bounds.lowerBound)
+                : "\(Report.formatUnits(bounds.lowerBound))–\(Report.formatUnits(bounds.upperBound))"
+        }
+        return HStack(spacing: 6) {
+            StatTile(title: "Days with basal",
+                     value: "\(insulin.daysWithBasal) of \(insulin.loggedDays)",
+                     unit: "days logged")
+            StatTile(title: "Usual dose",
+                     value: insulin.basalDose.map(Report.formatUnits) ?? "—",
+                     unit: "U · median")
+            StatTile(title: "Dose range",
+                     value: range,
+                     unit: "U")
+            StatTile(title: "Usual time",
+                     value: insulin.basalMinuteOfDay.map(Report.formatMinuteOfDay) ?? "—",
+                     unit: "median")
         }
     }
 
-    private var definitions: [String] {
-        let targets = document.targets
-        return [
-            "Time in range is the share of CGM readings in each band. The bands — \(targets.range(.inRange)) \(document.unit) in range, below \(InsulinStats.formatGlucose(targets.veryLow, unit: document.unit)) very low, above \(InsulinStats.formatGlucose(targets.veryHigh, unit: document.unit)) very high — and the goals beside them are the 2019 international consensus on time in range (Battelino et al.).",
-            "CGM active is the share of the period with a reading no more than 20 minutes from the next. Gaps are sensor warm-ups, lost signal, or data the Dexcom app had not yet uploaded.",
-            "Mean and SD are over every reading in the period; CV is SD divided by mean. The daily profile folds every reading onto one day in half-hour bins; a bin with fewer than five readings is left blank.",
-            "GMI is the glucose management indicator (Bergenstal et al., 2018) and estimated A1c the ADAG regression (Nathan et al., 2008), both from the mean glucose of this period alone. They are estimates from a population fit, not a laboratory result, and they can differ from each other by a few tenths.",
-            "Insulin per day is the units logged divided by the days the log covers, counted from the first entry ever made. Basal and bolus are as entered by the patient; a dose taken but not logged is absent here.",
-            "Carbohydrate counts only amounts entered in grams. Meals logged by size (snack, small, medium, large, very large) are counted but carry no gram figure.",
-            "Active energy is all movement for the day as Apple Health records it, with the part inside a recorded workout shown separately. Weight is as entered in Apple Health, in its unit.",
-        ]
-    }
+    /// Numbered as the pages cite them.
+    private static let references: [String] = [
+        "Battelino T, Danne T, Bergenstal RM, et al. Clinical targets for continuous glucose monitoring data interpretation: recommendations from the International Consensus on Time in Range. Diabetes Care. 2019;42(8):1593–1603.",
+        "Bergenstal RM, Ahmann AJ, Bailey T, et al. Recommendations for standardizing glucose reporting and analysis to optimize clinical decision making in diabetes: the Ambulatory Glucose Profile (AGP). Diabetes Technol Ther. 2013;15(3):198–211.",
+        "Bergenstal RM, Beck RW, Close KL, et al. Glucose Management Indicator (GMI): a new term for estimating A1C from continuous glucose monitoring. Diabetes Care. 2018;41(11):2275–2280.",
+        "Nathan DM, Kuenen J, Borg R, et al. Translating the A1C assay into estimated average glucose values. Diabetes Care. 2008;31(8):1473–1478.",
+        "Rapid-acting (NovoRapid) action curve: the exponential insulin activity model of OpenAPS, Loop and AndroidAPS, peak 75 min, duration 4 h.",
+        "Long-acting (Lantus) action curve: Lepore M, Pampanelli S, Fanelli C, et al. Pharmacokinetics and pharmacodynamics of subcutaneous injection of long-acting human insulin analog glargine, NPH insulin, and ultralente human insulin and continuous subcutaneous infusion of insulin lispro. Diabetes. 2000;49(12):2142–2148.",
+    ]
 
-    private var limits: [String] {
-        [
-            "Insulin and food are logged by hand on a watch. The CGM trace is the only series here that does not depend on anyone remembering anything.",
-            "The insulin-to-carb ratio is a description of how logged meals turned out, not a setting. It is only as good as the meals behind it and is listed with their count.",
-            "Nothing in this report is a dose recommendation. It describes what already happened.",
-        ]
-    }
-
-    // MARK: - Pages 4+: the day table
+    // MARK: - The day table
 
     private struct Column {
         let title: String
@@ -668,54 +635,48 @@ struct ReportPageView: View {
         let value: (Report.Day) -> String?
     }
 
-    private static let dateWidth: CGFloat = 54
+    private static let dateWidth: CGFloat = 56
 
     private var columns: [Column] {
         let unit = document.unit
         return [
-            Column(title: "CGM", unit: "%", width: 26) { day in
+            Column(title: "CGM", unit: "%", width: 28) { day in
                 day.glucose.map { Report.formatPercent($0.coverage) }
             },
-            Column(title: "Mean", unit: unit, width: 30) { day in
+            Column(title: "Mean", unit: unit, width: 32) { day in
                 day.glucose.map { InsulinStats.formatGlucose($0.mean, unit: unit) }
             },
-            Column(title: "SD", unit: unit, width: 26) { day in
+            Column(title: "SD", unit: unit, width: 28) { day in
                 day.glucose?.sd.map { InsulinStats.formatGlucose($0, unit: unit) }
             },
-            Column(title: "Low", unit: "%", width: 26) { day in
+            Column(title: "Low", unit: "%", width: 28) { day in
                 day.glucose.map { Report.formatPercent($0.belowRange) }
             },
-            Column(title: "In range", unit: "%", width: 34) { day in
+            Column(title: "In range", unit: "%", width: 36) { day in
                 day.glucose.map { Report.formatPercent($0.fraction(.inRange)) }
             },
-            Column(title: "High", unit: "%", width: 26) { day in
+            Column(title: "High", unit: "%", width: 28) { day in
                 day.glucose.map { Report.formatPercent($0.aboveRange) }
             },
-            Column(title: "Basal", unit: "U", width: 28) { day in
+            Column(title: "Basal", unit: "U", width: 30) { day in
                 day.basalCount > 0 ? Report.formatUnits(day.basal) : nil
             },
-            Column(title: "Bolus", unit: "U", width: 28) { day in
+            Column(title: "Bolus", unit: "U", width: 30) { day in
                 day.bolusCount > 0 ? Report.formatUnits(day.bolus) : nil
             },
-            Column(title: "Total", unit: "U", width: 28) { day in
+            Column(title: "Total", unit: "U", width: 30) { day in
                 day.total.map(Report.formatUnits)
             },
-            Column(title: "Doses", unit: "bolus", width: 28) { day in
+            Column(title: "Boluses", unit: "n", width: 32) { day in
                 day.bolusCount > 0 ? String(day.bolusCount) : nil
             },
-            Column(title: "Carbs", unit: "g", width: 28) { day in
-                day.carbs.map { String(Int($0.rounded())) }
-            },
-            Column(title: "Meals", unit: "by size", width: 30) { day in
-                day.mealsBySize > 0 ? String(day.mealsBySize) : nil
-            },
-            Column(title: "Workout", unit: "min", width: 32) { day in
+            Column(title: "Workout", unit: "min", width: 34) { day in
                 day.workoutMinutes > 0 ? String(day.workoutMinutes) : nil
             },
-            Column(title: "Active", unit: "kcal", width: 30) { day in
+            Column(title: "Active", unit: "kcal", width: 32) { day in
                 day.activeEnergy.map { String(Int($0.rounded())) }
             },
-            Column(title: "Weight", unit: document.weightUnit, width: 34) { day in
+            Column(title: "Weight", unit: document.weightUnit, width: 36) { day in
                 day.weight.map { String(format: "%.1f", $0) }
             },
         ]
@@ -725,8 +686,7 @@ struct ReportPageView: View {
         let rows = Array(days)
         let columns = self.columns
         return VStack(alignment: .leading, spacing: 0) {
-            sectionTitle("Day by day" + (continued ? " (continued)" : ""),
-                         detail: "a dash is a day with nothing recorded for that column")
+            sectionTitle("Day by day" + (continued ? " (continued)" : ""))
                 .padding(.bottom, 6)
 
             HStack(spacing: 0) {
@@ -772,7 +732,7 @@ struct ReportPageView: View {
         }
     }
 
-    // MARK: - Appendix: every entry
+    // MARK: - Appendix: every dose, reading and workout
 
     private func logTable(_ lines: ArraySlice<Report.LogLine>, continued: Bool) -> some View {
         let all = Array(lines)
@@ -780,8 +740,7 @@ struct ReportPageView: View {
         let left = Array(all.prefix(half))
         let right = Array(all.dropFirst(half))
         return VStack(alignment: .leading, spacing: 0) {
-            sectionTitle("Every entry" + (continued ? " (continued)" : ""),
-                         detail: "insulin, food and workouts in time order")
+            sectionTitle("Every dose, reading and workout" + (continued ? " (continued)" : ""))
                 .padding(.bottom, 6)
             HStack(alignment: .top, spacing: 16) {
                 logColumn(left)
@@ -861,7 +820,7 @@ struct ReportPageView: View {
 // MARK: - Pieces
 
 /// A figure, its name above and its unit below. The unit is on every tile
-/// because a page of tiles is read one at a time, not left to right.
+/// because a row of tiles is read one at a time, not left to right.
 private struct StatTile: View {
     let title: String
     let value: String
@@ -893,7 +852,7 @@ private struct StatTile: View {
 private struct TimeInRangeBar: View {
     let summary: Report.GlucoseSummary
 
-    private static let height: CGFloat = 150
+    private static let height: CGFloat = 120
 
     var body: some View {
         VStack(spacing: 2) {
@@ -928,10 +887,11 @@ enum ReportStyle {
     /// Two steps of one blue: basal the darker, as the larger and steadier half.
     static let basal = color(0x104281)
     static let bolus = color(0x5598e7)
-    static let carbs = color(0xeb6834)
     static let workout = color(0x0f6b4a)
     static let otherActivity = color(0x1baf7a)
     static let weight = color(0x6250d6)
+    static let a1c = color(0xb35a3e)
+    static let gmi = color(0x184f95)
 
     static func color(_ band: Report.Band) -> Color {
         switch band {

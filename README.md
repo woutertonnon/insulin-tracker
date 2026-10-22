@@ -1,7 +1,7 @@
 # Insulin Tracker
 
-A dead-simple Apple Watch app for logging carbs and insulin as a Type 1 diabetic,
-plus a read-only history view on iPhone. Built with SwiftUI + SwiftData.
+A dead-simple Apple Watch app for logging insulin and finger-prick blood sugar
+readings as a Type 1 diabetic, plus a read-only history view on iPhone. Built with SwiftUI + SwiftData.
 No cloud, no accounts — data stays on your devices.
 
 ## How it works
@@ -10,23 +10,30 @@ No cloud, no accounts — data stays on your devices.
 
 1. Press the **Action Button** (configured to open this app — see below).
 2. Turn the **Digital Crown**:
-   - **Up** → first the five meal sizes (**Snack, Small, Medium, Large, Very large**),
-     then exact **carbs in grams** if you know the number
+   - **Up** → a **blood sugar** reading from a finger-prick meter, in whatever
+     unit Health is set to on the phone — to a tenth of a mmol/L, or a whole
+     mg/dL, across the whole range
    - **Down** → first rapid-acting **insulin** in **0.5 U** steps up to 20 U,
      then long-acting **basal** insulin restarting at 1 U in **1 U** steps up to 60 U
 3. Stop turning. After **3 seconds** the value auto-saves with the current
    date & time, you get a checkmark + haptic, and it returns to the neutral screen.
 4. If you never turn the crown, **nothing is saved** — just drop your wrist.
 
-Meal sizes carry **no gram amount** — they're stored as a size, not a guess, for the
-common case where you don't know the carb count.
+Readings are **stored in mmol/L** whichever unit they were dialled in, so a
+reading survives Health being switched from one unit to the other, and the two
+devices — which may hear about a change at different times — never disagree
+about what a stored number means. The phone writes Health's unit down and sends
+it to the watch over the same local link the log uses.
+
+There is no carbohydrate logging. Earlier versions had it; rows of those kinds
+are deleted at launch.
 
 The **neutral screen** shows live **insulin on board**, **units active right now**,
 and a ticking **time since last bolus**. That's what you see first, before you turn
 the crown.
 
-> One value per session (the dial is either food *or* insulin). To log both,
-> press the Action Button again for a second entry.
+> One value per session (the dial is either a reading *or* insulin). To log
+> both, press the Action Button again for a second entry.
 
 **On the iPhone:** open the app to see all entries, newest first, grouped by day.
 Entries logged on the watch sync over the local WatchConnectivity link (Bluetooth/
@@ -36,9 +43,9 @@ Wi-Fi, no internet) — usually within a few seconds when the phone is nearby.
 
 ```
 Shared/            LogEntry (SwiftData model) + WatchConnectivity manager
-                   + InsulinMath (IOB / activity curve) + CarbRatio + InsulinStats
+                   + InsulinMath (IOB / activity curve) + GlucoseUnit + InsulinStats
                    + DailySeries + A1c + SharedStore (App Group) + BasalSchedule
-                   + Report (the doctor's report, computed)
+                   + Report (the doctor's report, computed) + InsulinAction
 WatchApp/          Watch app: the crown dial + auto-save (DialView.swift)
 iOSApp/            iPhone app: history, charts, the basal reminder setting,
                    and the doctor's report as a PDF (ReportView / ReportPDF /
@@ -304,75 +311,14 @@ o'clock stays ten o'clock.
 > dial with no navigation in it, and a settings screen behind that dial would
 > be a gesture that could be hit on the way to logging a dose.
 
-## Carb ratio
+## Blood sugar readings
 
-A running 28-day insulin-to-carb ratio, measured from **what actually happened
-after each meal** — no rules of thumb.
-
-For every meal logged in **grams** with a bolus in the hour before it, glucose is
-read at the meal and again four hours later. The miss is converted into the
-insulin that was missing, which gives the ratio that *would* have landed flat:
-
-```
-ideal units = units given + (glucose end − glucose start) / ISF
-ratio       = carbs / ideal units
-```
-
-That needs ISF — how far one unit moves you — so it is **measured, not assumed**,
-from *correction boluses*: insulin taken with no food within four hours, where
-the whole glucose fall is the dose's doing.
-
-A correction does not need a clean four hours, either — a morning correction
-followed by breakfast still has a clean couple of hours in it. The window is
-truncated at whatever comes next, and the drop is scaled by how much of the dose
-had acted by then, using the same action curve as the rest of the app. Requiring
-four undisturbed hours would discard most real corrections.
-
-Identifying those corrections can't rely on the log, though. Unlogged meals are
-the premise of this whole feature, and an unlogged meal plus its bolus looks
-exactly like a correction — it would drag ISF down and distort every ratio built
-on it. **The CGM curve is the arbiter instead**, since it doesn't depend on
-anyone remembering anything: carbohydrate absorbing pushes glucose *above* where
-it started, and a dose acting alone never does. Any window containing a rise of
-more than 10% above the starting value is discarded, logged or not. The
-threshold is a fraction rather than an absolute so it holds in mmol/L and mg/dL
-alike.
-
-That check only starts **90 minutes after the dose**. Insulin takes 15–20 minutes
-to bite and people correct when they are high *and climbing*, so glucose rising
-straight after a correction is the normal case, not evidence of food.
-
-A correction also has to move at least 8% and be at least 0.5 U, or the division
-is dominated by sensor noise.
-
-Results are split six ways, because both dimensions genuinely change the answer
-and the book notes most people need their lowest ratio in the morning:
-
-|  | No exercise | With exercise |
-|---|---|---|
-| **Morning** 04–11 | ● | ● |
-| **Lunch** 11–17 | ● | ● |
-| **Dinner** 17–04 | ● | ● |
-
-Each cell is the **median** over its meals, so one mis-logged meal can't drag it.
-A cell with fewer than 3 meals shows its count instead of a number, and every
-rejected meal is listed with the reason.
-
-A meal is used only if it has carbs in grams, exactly one bolus in the hour
-before (or moments after — the watch logs dose and meal seconds apart), no other
-insulin or food within 4 h, and glucose either side. Meals logged by size carry
-no gram figure and are never assigned a guessed one.
-
-> The window is 28 days. Six cells — three dayparts × exercise or not — leave a
-> seven-day window with almost nothing in the exercise column.
-
-> The unlogged-food filter protects the ISF measurement, not the meals
-> themselves. An unlogged snack *during* a meal's four-hour window still
-> distorts that meal — it looks like the meal ran high, so the ratio reads
-> tighter than it is. The median across meals limits the damage; it does not
-> eliminate it.
-
-> This describes what already happened. It is not a dose recommendation.
+Finger-prick readings live in the same log as the doses, logged from the
+watch dial or added on the phone, and are drawn as **dots on the glucose card**
+over the CGM line, so a meter check sits on the chart beside the sensor it was
+checking. They feed none of the maths — every average, chart and estimate is
+built from the CGM, which has a reading every five minutes where a meter has a
+handful a day. They are listed in the doctor's report appendix.
 
 ## Averages
 
@@ -548,56 +494,89 @@ on that screen hands it to AirDrop, Mail, print, or Files.
 
 It is modelled on the **Ambulatory Glucose Profile** (AGP), because that is
 the form every diabetes clinic reads CGM in, and a report in a familiar shape
-is read rather than deciphered. Pages, in order:
+is read rather than deciphered. It carries **titles, labels, values, legends
+and numbered references, and no prose** — the reader knows what time in range
+is, and every sentence would sit between them and the number. Anything a
+caveat would have said is a label with a value ("Days logged: 84 of 90");
+anything a method note would have said is a reference, listed on the last
+page in the form `[1] …`.
+
+Pages, in order:
 
 1. **Summary.** Mean glucose, GMI, estimated A1c, SD, CV and CGM coverage as
    tiles; **time in range** as the AGP's stacked bar and a table of the five
    consensus bands with percentages, hours per day and goals; the **daily
    profile** — every reading in the period folded onto one 24-hour day, with
-   the median, the 25–75% band and the 5–95% band per half hour; basal, bolus,
-   total, bolus share and boluses per day; carbohydrate logged per day; and a
-   list of everything that makes a figure mean less than it looks.
-2. **Day by day.** Mean glucose, insulin (basal and bolus as parts of one bar),
-   carbohydrate, active energy and weight, one mark per calendar day on a
-   shared time axis. Charts with nothing in them are left out.
-3. **Notes.** The basal pattern — days logged, the usual dose and its range,
-   the usual time; the app's 28-day **insulin-to-carb ratio** grid and
-   measured sensitivity, carried as they stand rather than recomputed; and
-   how every figure was made, with the references, so the clinic does not have
-   to take the numbers on trust.
-4. **The day table.** One row per day: CGM coverage, mean, SD, time below, in
-   and above range, basal, bolus, total, number of boluses, carbs, meals
-   logged by size, workout minutes, active energy, weight. A dash is a day
-   with nothing recorded.
-5. **Every entry** (optional). Each dose, meal and workout in time order, two
-   columns to a page. Off by default; the day table is what a clinic usually
-   wants, and this is for the visit where one particular day needs explaining.
+   the median, the 25–75% band and the 5–95% band per half hour. Then basal,
+   bolus, total, bolus share, boluses per day and days logged as tiles, and
+   **insulin acting through the day** — see below.
+2. **Over time.** Estimated A1c and GMI per day, mean glucose per day, and
+   insulin per day with basal and bolus as parts of one bar. Each chart
+   carries its **14-, 30- and 90-day averages** as `14-day average: 7.4
+   mmol/L` beside its title, whatever period the report covers.
+3. **Activity and weight** — active energy and weight per day, with the same
+   three averages. Left out when Health has neither.
+4. **Basal and references.** Days with basal, usual dose, dose range and usual
+   time as tiles, and the numbered references.
+5. **The day table.** One row per day: CGM coverage, mean, SD, time below, in
+   and above range, basal, bolus, total, number of boluses, workout minutes,
+   active energy, weight. A dash is a day with nothing recorded.
+6. **Every dose, reading and workout** (optional). Each injection, finger-prick
+   reading and workout in time order, two columns to a page. Off by default.
+
+### Insulin acting through the day
+
+The chart on page one that a CGM report cannot have: for a typical day of the
+period, how much insulin was acting at each time of day, basal and bolus
+stacked. It is in **units per hour** — the rate at which insulin is being used
+up — because a rate is the only form in which basal and bolus can be added,
+and because it is the unit a pump's basal is prescribed in, so a clinic reads
+the basal half without translation. The area under a day's curve is the day's
+dose, which ties it to the per-day tiles above it. (The watch's "U active" is a
+different, peak-normalised scale; see **Insulin on board**.)
+
+Two standard action profiles, in `Shared/InsulinAction.swift`:
+
+- **NovoRapid (aspart)** — the same exponential curve the forecast chart uses
+  (peak 75 min, duration 4 h), rescaled so its area is one rather than its
+  peak.
+- **Lantus (glargine)** — onset over the first two hours, flat until about
+  twenty, gone by twenty-four: the "peakless" profile clamp studies (Lepore et
+  al., 2000) and *Think Like a Pancreas* both describe. A smooth trapezoid,
+  not a fit; neither source gives it a finer shape.
+
+For every day the log covers, the rate of every logged dose is sampled every
+ten minutes — the previous day's doses included, since an evening basal acts
+through the next day — and **averaged across days**. A mean rather than a
+median, so the area stays the average daily dose: a bolus given at one o'clock
+on some days and two on others shows as a wider, lower bump, which is the
+truth of it, where a median would lose it altogether.
+
+### The rest of the method
 
 The glucose bands and goals are the **2019 international consensus on time in
 range** (Battelino et al.): 3.9–10.0 mmol/L (70–180 mg/dL) in range, below 3.0
-(54) very low, above 13.9 (250) very high, with the goals printed beside them.
-They are not configurable — a report meant to be read against the published
-targets should use the published edges — and the page says that targets are
-individual.
+(54) very low, above 13.9 (250) very high. They are not configurable — a report
+meant to be read against the published targets should use the published edges.
 
 **GMI is on the report and not in the app.** The glucose management indicator
 (Bergenstal et al., 2018) is the figure a CGM report carries in place of an
 estimated A1c, from a different fit to a different population, which is why it
 and the ADAG estimate on the trends chart can disagree by a few tenths. The
-report gives both, each labelled with its source, so the clinic sees the number
-it is used to beside the one the patient has been watching.
+report gives both, each with its reference, so the clinic sees the number it
+is used to beside the one the patient has been watching.
 
 **Whole days ending yesterday**, deliberately. A report generated at eleven in
 the morning should not carry a day with a third of its readings in it, and a
 dated range reads more easily across a desk than "the last 90 days from
 10:42". Health is queried a day further back than the averages need so that
-the 90-day report is complete.
+the 90-day report is complete. The three averaging windows end on the same
+day, and the chosen period is one of them, so its figures and that column
+agree by construction.
 
 Per-day insulin is divided by the days the log covers, counted from the first
 entry ever made — the same rule as the Averages card — so a log that began
-mid-period does not read as a period of half doses. The caveats on page one
-say when that has happened, along with days with no basal entry, CGM coverage
-under 80%, and meals logged by size.
+mid-period does not read as a period of half doses.
 
 The pages are ordinary SwiftUI views laid out at paper size and drawn through
 `ImageRenderer` into a Core Graphics PDF context, so the charts are vectors and
@@ -605,11 +584,10 @@ the text is text. Tables are paginated by arithmetic — every row is a fixed
 height — rather than by measuring, so nothing can run off the bottom of a
 page. Paper is Letter where the locale measures in inches and A4 everywhere
 else. Colours are fixed print colours chosen so that each pair that sits side
-by side stays apart for colour-blind readers and in greyscale, and every band
-and bar is also named in words.
+by side stays apart for colour-blind readers and in greyscale, and every
+multi-series chart carries a legend.
 
-> Nothing on it has been reviewed by a clinician, and it says so. It describes
-> what already happened; it is not a dose recommendation.
+> It describes what already happened; it is not a dose recommendation.
 
 ## Apple Health
 
@@ -663,10 +641,10 @@ absent. That failure appears only at upload, after archiving and signing succeed
 - **Auto-close:** watchOS apps can't quit themselves programmatically (App Store
   disallows it). "Do nothing" simply saves nothing; dropping your wrist backgrounds
   the app. Reopening always starts fresh at the neutral screen.
-- **Ranges:** carbs use a ladder that coarsens as the number grows (1–10 by 1,
-  then 15/20/25/30, then by 10 up to 200 g, then by 25 up to 500 g); bolus insulin
-  is 0.5–20 U; basal is 1–60 U. Adjust `carbLadder` / `bolusMaxSteps` /
-  `basalMaxUnits` in `WatchApp/DialView.swift`.
+- **Ranges:** blood sugar runs 2.0–30.0 mmol/L by a tenth (40–500 mg/dL by
+  one) — see `dialLadder` in `Shared/GlucoseUnit.swift`; bolus insulin is
+  0.5–20 U; basal is 1–60 U.
+  Adjust `bolusMaxSteps` / `basalMaxUnits` in `WatchApp/DialView.swift`.
 - **Replace the icon:** drop your own 1024×1024 PNG over
   `iOSApp/Assets.xcassets/AppIcon.appiconset/icon-1024.png` (and the watch one), or
   re-run `python3 scripts/make_icon.py`.

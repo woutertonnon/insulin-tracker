@@ -105,6 +105,13 @@ final class HealthStore: ObservableObject {
         if let unit = units?[glucoseType] {
             glucoseUnit = unit
             glucoseUnitLabel = unit.unitString
+            // The watch dials readings in this unit too, and the editor here
+            // takes them in it, so Health's choice is written down and sent.
+            let preferred = GlucoseUnit(label: unit.unitString)
+            if preferred != GlucoseUnit.current() {
+                preferred.store()
+                ConnectivityManager.shared.sendGlucoseUnit(preferred)
+            }
         }
         if let unit = units?[weightType] {
             weightUnit = unit
@@ -258,6 +265,9 @@ final class HealthStore: ObservableObject {
 
     /// Most recent reading, if any.
     var latestGlucose: GlucoseSample? { glucose.last }
+
+    /// Health's unit as the app's own type, for readings logged by hand.
+    var glucoseUnitPreference: GlucoseUnit { GlucoseUnit(label: glucoseUnitLabel) }
 
     /// Formatted for the unit in use: mmol/L wants a decimal, mg/dL does not.
     func format(_ sample: GlucoseSample) -> String {

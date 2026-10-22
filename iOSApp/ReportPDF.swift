@@ -26,7 +26,8 @@ enum ReportPDF {
     /// and the number that fit is arithmetic.
     enum Page {
         case summary
-        case charts
+        case overTime
+        case movement
         case notes
         case days(ArraySlice<Report.Day>, continued: Bool)
         case log(ArraySlice<Report.LogLine>, continued: Bool)
@@ -35,7 +36,9 @@ enum ReportPDF {
     static func paginate(_ document: Report.Document,
                          includeLog: Bool,
                          pageSize: CGSize) -> [Page] {
-        var pages: [Page] = [.summary, .charts, .notes]
+        var pages: [Page] = [.summary, .overTime]
+        if document.hasEnergy || document.hasWeight { pages.append(.movement) }
+        pages.append(.notes)
 
         // The title block, the section heading and the column headers sit
         // above a table; 120 points is more than they take, so the rows that

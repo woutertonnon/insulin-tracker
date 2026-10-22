@@ -101,14 +101,14 @@ enum Report {
         }
 
         /// The consensus goal for adults with type 1 or type 2 diabetes, as a
-        /// share of time. The low and high goals are cumulative — "under 4%
-        /// below range" includes the very-low band — which is said on the page.
+        /// share of time. The low and high goals are cumulative in the source —
+        /// "under 4%" is everything below range, the very-low band included.
         var goal: String {
             switch self {
             case .veryLow: return "< 1%"
-            case .low: return "< 4%, with very low"
+            case .low: return "< 4%"
             case .inRange: return "> 70%"
-            case .high: return "< 25%, with very high"
+            case .high: return "< 25%"
             case .veryHigh: return "< 5%"
             }
         }
@@ -288,12 +288,6 @@ enum Report {
         let bolus: Double
         let basalCount: Int
         let bolusCount: Int
-        /// Grams logged as a number. Nil when nothing was, which is not the
-        /// same as none eaten.
-        let carbs: Double?
-        /// Meals logged by size only. They carry no gram figure and are never
-        /// given one.
-        let mealsBySize: Int
         let workouts: [Workout]
         let activeEnergy: Double?
         let weight: Double?
@@ -341,16 +335,97 @@ enum Report {
         var basalGapDays: Int { max(0, loggedDays - daysWithBasal) }
     }
 
-    struct FoodSummary: Hashable, Sendable {
-        let daysWithCarbs: Int
-        /// Mean grams over the days that have grams, not over the period.
-        let carbsPerLoggedDay: Double?
-        let mealsBySize: Int
+    /// The same figures over a fixed look-back, so a change shows up as a
+    /// column that no longer matches the ones beside it. Every window ends
+    /// yesterday; the one matching the chosen period is the one the rest of
+    /// the report describes.
+    struct Window: Identifiable, Sendable {
+        let period: Period
+        let start: Date
+        let glucose: GlucoseSummary?
+        let insulin: InsulinSummary
+        /// Mean over the days in the window that have a figure.
+        let activeEnergyPerDay: Double?
+        let weight: Double?
+
+        var id: Int { period.days }
+        var days: Int { period.days }
+
+        /// "14-day average"
+        var title: String { "\(period.days)-day average" }
+    }
+
+    // MARK: - Insulin acting through the day
+
+    /// Units acting per hour at one time of day, averaged over the days logged.
+    struct ActivityBin: Identifiable, Hashable, Sendable {
+        let minuteOfDay: Int
+        let basal: Double
+        let bolus: Double
+
+        var id: Int { minuteOfDay }
+        var hour: Double { Double(minuteOfDay) / 60 }
+    }
+
+    static let activityStepMinutes = 10
+
+    /// The action rate of every logged dose at each ten minutes of each day
+    /// the log covers — doses from the day before included, since an evening
+    /// basal acts through the next day — averaged across those days.
+    ///
+    /// A mean rather than a median, so the area under the curve is the average
+    /// daily dose and agrees with the per-day tiles. A bolus given at one on
+    /// some days and at two on others shows as a wider, lower bump, which is
+    /// the truth of it; a median would lose it altogether.
+    static func activityProfile(doses: [Event],
+                                days: [Day],
+                                firstEvent: Date?,
+                                calendar: Calendar) -> [ActivityBin] {
+        guard let firstEvent else { return [] }
+        let firstDay = calendar.startOfDay(for: firstEvent)
+        let logged = days.filter { $0.date >= firstDay }
+        guard !logged.isEmpty else { return [] }
+
+        let sorted = doses
+            .filter { $0.kind == .basal || $0.kind == .insulin }
+            .sorted { $0.date < $1.date }
+        let stepsPerDay = 24 * 60 / activityStepMinutes
+        var basal = [Double](repeating: 0, count: stepsPerDay)
+        var bolus = [Double](repeating: 0, count: stepsPerDay)
+
+        for day in logged {
+            // Nothing acts for longer than a day, so yesterday's doses are the
+            // oldest that can matter to today.
+            let from = calendar.date(byAdding: .day, value: -1, to: day.date) ?? day.date
+            let to = calendar.date(byAdding: .day, value: 1, to: day.date) ?? day.date
+            let relevant = sorted.filter { $0.date >= from && $0.date < to }
+            guard !relevant.isEmpty else { continue }
+
+            for step in 0..<stepsPerDay {
+                let instant = day.date.addingTimeInterval(Double(step * activityStepMinutes) * 60)
+                for dose in relevant where dose.date <= instant {
+                    let hours = instant.timeIntervalSince(dose.date) / 3600
+                    if dose.kind == .basal {
+                        basal[step] += dose.amount * InsulinAction.basalRate(hours: hours)
+                    } else {
+                        bolus[step] += dose.amount * InsulinAction.bolusRate(hours: hours)
+                    }
+                }
+            }
+        }
+
+        let count = Double(logged.count)
+        return (0..<stepsPerDay).map { step in
+            ActivityBin(minuteOfDay: step * activityStepMinutes,
+                        basal: basal[step] / count,
+                        bolus: bolus[step] / count)
+        }
     }
 
     // MARK: - A line of the appendix
 
-    /// An entry or a workout, in time order, spelled out for the page.
+    /// A dose, a finger-prick reading or a workout, in time order, spelled out
+    /// for the page.
     struct LogLine: Identifiable, Hashable, Sendable {
         /// Position in the appendix. Two entries can share a second and a kind,
         /// so nothing about the entry itself is unique enough to be the id.
@@ -374,15 +449,15 @@ enum Report {
         let weightUnit: String
         let weightAxisPadding: Double
 
+        /// Over the chosen period.
         let glucose: GlucoseSummary?
         let profile: [ProfileBin]
         let days: [Day]
         let insulin: InsulinSummary
-        let food: FoodSummary
-        /// The app's running insulin-to-carb estimate, carried as it stands
-        /// rather than recomputed: it has its own fixed 28-day window and its
-        /// own rules, and a clinic should see the same figure the patient sees.
-        let carbRatio: CarbRatio.Estimate?
+        /// Over 14, 30 and 90 days, whatever the period chosen.
+        let windows: [Window]
+        /// Insulin acting through a typical day of the chosen period.
+        let activity: [ActivityBin]
         let workouts: [Workout]
         let log: [LogLine]
 
@@ -400,7 +475,12 @@ enum Report {
                                          p75: first.p75, p95: first.p95, count: first.count)]
         }
 
-        var hasCarbs: Bool { days.contains { $0.carbs != nil } }
+        /// Closed at 24:00 with the midnight bin, like the glucose profile.
+        var activityPlot: [ActivityBin] {
+            guard let first = activity.first, first.minuteOfDay == 0 else { return activity }
+            return activity + [ActivityBin(minuteOfDay: 24 * 60, basal: first.basal, bolus: first.bolus)]
+        }
+
         var hasEnergy: Bool { days.contains { $0.activeEnergy != nil } }
         var hasWeight: Bool { days.contains { $0.weight != nil } }
 
@@ -422,20 +502,23 @@ enum Report {
                       workouts: [Workout],
                       energy: [Energy],
                       weights: [Weight],
-                      carbRatio: CarbRatio.Estimate? = nil,
                       calendar: Calendar = .current) -> Document {
         let end = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: -period.days, to: end) ?? end
+        // Everything is bucketed once over the longest window; the chosen
+        // period and the three averaging windows are then suffixes of it.
+        let longestStart = calendar.date(byAdding: .day, value: -longestPeriod, to: end) ?? end
         let targets = Targets.standard(unit: glucoseUnit)
+        let unit = GlucoseUnit(label: glucoseUnit)
 
         let readings = glucose
-            .filter { $0.date >= start && $0.date < end }
+            .filter { $0.date >= longestStart && $0.date < end }
             .sorted { $0.date < $1.date }
         let inPeriod = events
-            .filter { $0.date >= start && $0.date < end }
+            .filter { $0.date >= longestStart && $0.date < end }
             .sorted { $0.date < $1.date }
         let periodWorkouts = workouts
-            .filter { $0.start >= start && $0.start < end }
+            .filter { $0.start >= longestStart && $0.start < end }
             .sorted { $0.start < $1.start }
 
         // Bucketed once rather than filtered per day — ninety days against
@@ -458,14 +541,14 @@ enum Report {
         }
         // Last reading of the day wins, as on the trends chart.
         var weightByDay: [Date: Weight] = [:]
-        for reading in weights where reading.date >= start && reading.date < end {
+        for reading in weights where reading.date >= longestStart && reading.date < end {
             let day = calendar.startOfDay(for: reading.date)
             if let existing = weightByDay[day], existing.date >= reading.date { continue }
             weightByDay[day] = reading
         }
 
-        var days: [Day] = []
-        var cursor = start
+        var allDays: [Day] = []
+        var cursor = longestStart
         while cursor < end {
             // Asked of the calendar, so a clock-change day is 23 or 25 hours
             // and is not scored as short of readings.
@@ -474,9 +557,8 @@ enum Report {
             let dayEvents = eventsByDay[cursor] ?? []
             let basalDoses = dayEvents.filter { $0.kind == .basal }
             let bolusDoses = dayEvents.filter { $0.kind == .insulin }
-            let carbEntries = dayEvents.filter { $0.kind == .carbs }
 
-            days.append(Day(
+            allDays.append(Day(
                 date: cursor,
                 glucose: summarise(glucoseByDay[cursor] ?? [],
                                    over: next.timeIntervalSince(cursor),
@@ -485,8 +567,6 @@ enum Report {
                 bolus: bolusDoses.reduce(0.0) { $0 + $1.amount },
                 basalCount: basalDoses.count,
                 bolusCount: bolusDoses.count,
-                carbs: carbEntries.isEmpty ? nil : carbEntries.reduce(0.0) { $0 + $1.amount },
-                mealsBySize: dayEvents.filter { $0.kind == .meal }.count,
                 workouts: workoutsByDay[cursor] ?? [],
                 activeEnergy: energyByDay[cursor],
                 weight: weightByDay[cursor]?.value
@@ -494,7 +574,33 @@ enum Report {
             cursor = next
         }
 
-        let log = (inPeriod.map(line) + periodWorkouts.map(line))
+        // Earliest entry of any age: it is what says how far the log reaches.
+        let firstEvent = events.map(\.date).min()
+
+        let windows = Period.allCases.map { window -> Window in
+            let windowStart = calendar.date(byAdding: .day, value: -window.days, to: end) ?? end
+            let windowDays = allDays.filter { $0.date >= windowStart }
+            return Window(
+                period: window,
+                start: windowStart,
+                glucose: summarise(readings.filter { $0.date >= windowStart },
+                                   over: end.timeIntervalSince(windowStart),
+                                   targets: targets),
+                insulin: summariseInsulin(days: windowDays,
+                                          basalEvents: inPeriod.filter { $0.kind == .basal && $0.date >= windowStart },
+                                          firstEvent: firstEvent,
+                                          calendar: calendar),
+                activeEnergyPerDay: mean(windowDays.compactMap(\.activeEnergy)),
+                weight: mean(windowDays.compactMap(\.weight))
+            )
+        }
+        // The chosen period is one of the windows, so its figures are the
+        // same ones as in that column of the averages table, by construction.
+        let current = windows.first { $0.period == period } ?? windows[0]
+
+        let chosenEvents = inPeriod.filter { $0.date >= start }
+        let chosenWorkouts = periodWorkouts.filter { $0.start >= start }
+        let log = (chosenEvents.map { line($0, unit: unit) } + chosenWorkouts.map(line))
             .sorted { $0.date < $1.date }
             .enumerated()
             .map { LogLine(id: $0.offset,
@@ -510,16 +616,16 @@ enum Report {
                         targets: targets,
                         weightUnit: weightUnit,
                         weightAxisPadding: weightAxisPadding,
-                        glucose: summarise(readings, over: end.timeIntervalSince(start), targets: targets),
-                        profile: profile(readings, calendar: calendar),
-                        days: days,
-                        insulin: summariseInsulin(days: days,
-                                                  basalEvents: inPeriod.filter { $0.kind == .basal },
-                                                  firstEvent: events.map(\.date).min(),
+                        glucose: current.glucose,
+                        profile: profile(readings.filter { $0.date >= start }, calendar: calendar),
+                        days: allDays.filter { $0.date >= start },
+                        insulin: current.insulin,
+                        windows: windows,
+                        activity: activityProfile(doses: inPeriod,
+                                                  days: allDays.filter { $0.date >= start },
+                                                  firstEvent: firstEvent,
                                                   calendar: calendar),
-                        food: summariseFood(days: days),
-                        carbRatio: carbRatio,
-                        workouts: periodWorkouts,
+                        workouts: chosenWorkouts,
                         log: log)
     }
 
@@ -558,13 +664,8 @@ enum Report {
         )
     }
 
-    private static func summariseFood(days: [Day]) -> FoodSummary {
-        let grams = days.compactMap(\.carbs)
-        return FoodSummary(
-            daysWithCarbs: grams.count,
-            carbsPerLoggedDay: grams.isEmpty ? nil : grams.reduce(0.0, +) / Double(grams.count),
-            mealsBySize: days.reduce(0) { $0 + $1.mealsBySize }
-        )
+    private static func mean(_ values: [Double]) -> Double? {
+        values.isEmpty ? nil : values.reduce(0.0, +) / Double(values.count)
     }
 
     private static func median(_ values: [Double]) -> Double? {
@@ -576,11 +677,11 @@ enum Report {
             : sorted[mid]
     }
 
-    private static func line(_ event: Event) -> LogLine {
+    private static func line(_ event: Event, unit: GlucoseUnit) -> LogLine {
         LogLine(id: 0,
                 date: event.date,
                 title: title(for: event.kind),
-                amount: formatAmount(kind: event.kind, amount: event.amount),
+                amount: formatAmount(kind: event.kind, amount: event.amount, unit: unit),
                 isWorkout: false)
     }
 
@@ -602,17 +703,15 @@ enum Report {
     /// word a clinic uses for the rapid-acting dose is the clearer one.
     static func title(for kind: EntryKind) -> String {
         switch kind {
-        case .carbs: return "Carbs"
-        case .meal: return "Meal"
+        case .glucose: return "Meter"
         case .insulin: return "Bolus"
         case .basal: return "Basal"
         }
     }
 
-    static func formatAmount(kind: EntryKind, amount: Double) -> String {
+    static func formatAmount(kind: EntryKind, amount: Double, unit: GlucoseUnit) -> String {
         switch kind {
-        case .carbs: return "\(Int(amount.rounded())) g"
-        case .meal: return MealSize(rawValue: Int(amount))?.label ?? "Meal"
+        case .glucose: return "\(unit.format(amount)) \(unit.label)"
         case .insulin: return "\(formatUnits(amount)) U"
         case .basal: return "\(Int(amount.rounded())) U"
         }

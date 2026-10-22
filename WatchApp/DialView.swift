@@ -6,7 +6,8 @@ import WidgetKit
 /// The single-screen logging UI.
 ///
 /// One Digital Crown dial:
-///   • crown UP   → first the five meal sizes, then exact carbs in grams
+///   • crown UP   → a blood sugar reading from a finger-prick meter, in the
+///                  unit Health is set to on the phone
 ///   • crown DOWN → first rapid-acting insulin (0.5 U steps, to 20 U),
 ///                  then long-acting basal insulin (1 U steps, to 60 U)
 ///   • center (0) → neutral, shows insulin on board + time since last bolus
@@ -28,6 +29,11 @@ struct DialView: View {
     @State private var pendingSave: Task<Void, Never>?
     @State private var justSaved: SavedInfo?
 
+    /// The unit readings are dialled in. The phone's copy of Health's choice,
+    /// put in the App Group over WatchConnectivity; re-read whenever the app
+    /// comes to the front, since a change can land while it is away.
+    @State private var glucoseUnit = SharedStore.glucoseUnit()
+
     private let autoSaveDelay: Duration = .seconds(3)
 
     /// Re-logging the same kind within this window edits the last entry
@@ -36,22 +42,9 @@ struct DialView: View {
 
     // MARK: - Dial ladders
 
-    /// Crown up, steps 1…5: meal sizes, for when the carb count isn't known.
-    private static let mealSizes = MealSize.allCases
-
-    /// Crown up, steps 6+: exact carb amounts (g), coarsening as the number
-    /// grows, since 5 g matters at 20 g and not at 300 g: 1…10 by 1, then
-    /// 15/20/25/30, then by 10 up to 200, then by 25 up to 500.
-    ///
-    /// The step widens past 200 rather than continuing by 10 to keep the crown
-    /// travel usable — by 10 all the way would be 47 extra positions.
-    private static let carbLadder: [Int] =
-        Array(1...10)
-        + Array(stride(from: 15, through: 30, by: 5))
-        + Array(stride(from: 40, through: 200, by: 10))
-        + Array(stride(from: 225, through: 500, by: 25))
-
-    private static let carbMaxSteps = mealSizes.count + carbLadder.count
+    /// Crown up, steps 1…N: every blood sugar value the meter could read, in
+    /// the unit in use. See `GlucoseUnit.dialLadder`.
+    private var glucoseLadder: [Double] { glucoseUnit.dialLadder }
 
     /// Crown down, steps 1…40: rapid-acting bolus in 0.5 U steps, up to 20 U.
     private static let bolusMaxSteps = 40
@@ -76,18 +69,11 @@ struct DialView: View {
 
     // MARK: - Dial value decoding
 
-    /// What a positive crown step means: a meal size, or exact grams.
-    private enum CarbValue {
-        case meal(MealSize)
-        case grams(Int)
-    }
-
-    private func carbValue(for positiveStep: Int) -> CarbValue {
-        let s = min(max(positiveStep, 1), Self.carbMaxSteps)
-        if s <= Self.mealSizes.count {
-            return .meal(Self.mealSizes[s - 1])
-        }
-        return .grams(Self.carbLadder[s - Self.mealSizes.count - 1])
+    /// What a positive crown step means: a reading, in the unit in use.
+    private func glucoseValue(for positiveStep: Int) -> Double {
+        let ladder = glucoseLadder
+        let s = min(max(positiveStep, 1), ladder.count)
+        return ladder[s - 1]
     }
 
     /// What a negative crown step means: a rapid-acting bolus, or basal.
@@ -130,7 +116,7 @@ struct DialView: View {
         .digitalCrownRotation(
             $index,
             from: -Double(Self.insulinMaxSteps),
-            through: Double(Self.carbMaxSteps),
+            through: Double(glucoseLadder.count),
             by: 1,
             sensitivity: .low,
             isContinuous: false,
@@ -142,6 +128,7 @@ struct DialView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                glucoseUnit = SharedStore.glucoseUnit()
                 resetToNeutral()
                 // Repair the complication if a push was missed while away.
                 syncWidget()
@@ -154,6 +141,7 @@ struct DialView: View {
             }
         }
         .onAppear {
+            glucoseUnit = SharedStore.glucoseUnit()
             resetToNeutral()
             syncWidget()
         }
@@ -184,22 +172,12 @@ struct DialView: View {
     @ViewBuilder
     private var dialContent: some View {
         if step > 0 {
-            switch carbValue(for: step) {
-            case .meal(let size):
-                valueView(title: "MEAL",
-                          value: size.shortLabel,
-                          unit: nil,
-                          color: .orange,
-                          systemImage: "fork.knife.circle",
-                          large: false)
-            case .grams(let g):
-                valueView(title: "CARBS",
-                          value: "\(g)",
-                          unit: "g",
-                          color: .orange,
-                          systemImage: "fork.knife",
-                          large: true)
-            }
+            valueView(title: "BLOOD SUGAR",
+                      value: glucoseUnit.formatValue(glucoseValue(for: step)),
+                      unit: glucoseUnit.label,
+                      color: .pink,
+                      systemImage: "drop.fill",
+                      large: true)
         } else if step < 0 {
             switch insulinValue(for: -step) {
             case .bolus(let units):
@@ -264,9 +242,9 @@ struct DialView: View {
                 Divider().padding(.vertical, 1)
 
                 VStack(spacing: 2) {
-                    Label("Meal / carbs", systemImage: "arrow.up")
+                    Label("Blood sugar", systemImage: "arrow.up")
                         .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.pink)
                     Label("Insulin / basal", systemImage: "arrow.down")
                         .font(.caption2)
                         .foregroundStyle(.blue)
@@ -357,14 +335,9 @@ struct DialView: View {
         let amount: Double
 
         if s > 0 {
-            switch carbValue(for: s) {
-            case .meal(let size):
-                kind = .meal
-                amount = Double(size.rawValue)
-            case .grams(let g):
-                kind = .carbs
-                amount = Double(g)
-            }
+            kind = .glucose
+            // Stored in mmol/L whichever unit it was dialled in.
+            amount = glucoseUnit.stored(glucoseValue(for: s))
         } else {
             switch insulinValue(for: -s) {
             case .bolus(let units):
@@ -397,7 +370,7 @@ struct DialView: View {
 
         syncWidget(including: entry)
 
-        justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount)
+        justSaved = SavedInfo(text: (wasCorrection ? "Updated " : "Saved ") + entry.displayAmount(in: glucoseUnit))
 
         // Show confirmation briefly, then return to neutral.
         Task {

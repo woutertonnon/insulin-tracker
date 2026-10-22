@@ -47,6 +47,10 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     /// `BasalSchedule.reminderOff`. Travels phone → watch only.
     private static let basalReminderKey = "basalReminder"
 
+    /// Key for the glucose unit the watch dials readings in, as the raw
+    /// `GlucoseUnit` string. Health decides it on the phone; phone → watch only.
+    private static let glucoseUnitKey = GlucoseUnit.settingsKey
+
     func activate() {
         guard WCSession.isSupported() else { return }
         WCSession.default.delegate = self
@@ -99,6 +103,18 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         pushSnapshot()
     }
 
+    /// Push the glucose unit to the watch, so a reading dialled there is in
+    /// the unit Health is in here. Same channel and same reasoning as the
+    /// reminder; it changes about as often as a meter does, so no debounce.
+    @MainActor
+    func sendGlucoseUnit(_ unit: GlucoseUnit) {
+        transfer([
+            Op.key: Op.settings,
+            Self.glucoseUnitKey: unit.rawValue,
+        ])
+        pushSnapshot()
+    }
+
     /// Every bolus, flattened. Rides along with each message so a single
     /// delivery carries complete state — the receiver never has to have seen
     /// any earlier message for the complication to end up correct.
@@ -134,6 +150,7 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         // "turn it off".
         context[Self.basalReminderKey] =
             BasalSchedule.Defaults.current()?.minuteOfDay ?? BasalSchedule.reminderOff
+        context[Self.glucoseUnitKey] = GlucoseUnit.current().rawValue
         #endif
 
         // Throws only if the session is not activated, which is guarded above.
@@ -300,17 +317,24 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
     }
 
     #if os(watchOS)
-    /// Store the basal reminder where the widget process can read it.
+    /// Store the phone's settings where the watch app and the widget process
+    /// can read them: the basal reminder, and the glucose unit.
     ///
-    /// One-way by design: the phone owns the setting, and nothing on iOS needs
-    /// this — the phone has no App Group of its own, and it is the source of
-    /// the value anyway.
+    /// One-way by design: the phone owns both, and nothing on iOS needs this —
+    /// the phone has no App Group of its own, and it is the source of the
+    /// values anyway. Each key is applied on its own, so a message carrying
+    /// one setting says nothing about the other.
     @MainActor
     private func applySettings(_ payload: [String: Any]) {
-        guard let minute = payload[Self.basalReminderKey] as? Int else { return }
-        // `reminderOff` fails `Reminder`'s validating initialiser, which is how
-        // "off" arrives as nil rather than as a reminder at some odd hour.
-        SharedStore.setBasalReminder(BasalSchedule.Reminder(minuteOfDay: minute))
+        if let minute = payload[Self.basalReminderKey] as? Int {
+            // `reminderOff` fails `Reminder`'s validating initialiser, which is
+            // how "off" arrives as nil rather than as a reminder at some odd hour.
+            SharedStore.setBasalReminder(BasalSchedule.Reminder(minuteOfDay: minute))
+        }
+        if let raw = payload[Self.glucoseUnitKey] as? String,
+           let unit = GlucoseUnit(rawValue: raw) {
+            SharedStore.setGlucoseUnit(unit)
+        }
     }
 
     /// Republish what the complication reads out of the App Group, then rebuild

@@ -16,7 +16,6 @@ import PDFKit
 struct ReportView: View {
     let entries: [LogEntry]
     @ObservedObject var health: HealthStore
-    let carbRatio: CarbRatio.Estimate
 
     @AppStorage("reportPeriodDays")
     private var periodDays = Report.Period.month.rawValue
@@ -70,7 +69,7 @@ struct ReportView: View {
             Toggle(isOn: $includeLog) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Append every entry")
-                    Text("Each dose, meal and workout in time order. Adds pages.")
+                    Text("Each injection, meter reading and workout in time order. Adds pages.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -122,7 +121,6 @@ struct ReportView: View {
         }
         let energy = health.dailyEnergy.map { Report.Energy(day: $0.day, kilocalories: $0.kilocalories) }
         let weights = health.weights.map { Report.Weight(date: $0.date, value: $0.value) }
-        let carbRatio = self.carbRatio
 
         build = Task {
             // The numbers are built off the main thread — ninety days of CGM
@@ -138,8 +136,7 @@ struct ReportView: View {
                              events: events,
                              workouts: workouts,
                              energy: energy,
-                             weights: weights,
-                             carbRatio: carbRatio)
+                             weights: weights)
             }.value
             if Task.isCancelled { return }
 
