@@ -39,10 +39,10 @@ struct ReportPageView: View {
         switch page {
         case .summary:
             summary
-        case .overTime:
-            overTime
-        case .movement:
-            movement
+        case .glucoseOverTime:
+            glucoseOverTime
+        case .insulinAndBody:
+            insulinAndBody
         case .notes:
             notes
         case .days(let days, let continued):
@@ -108,6 +108,45 @@ struct ReportPageView: View {
         Text("—")
             .foregroundStyle(ReportStyle.muted)
     }
+
+    /// One entry of a legend: a swatch and what it stands for.
+    private struct LegendItem {
+        let color: Color
+        let label: String
+        var dashed = false
+    }
+
+    /// Drawn here rather than left to the chart library, so it is on the page
+    /// whatever the renderer makes of the library's own legend.
+    private func legend(_ items: [LegendItem]) -> some View {
+        HStack(spacing: 10) {
+            ForEach(items.indices, id: \.self) { index in
+                HStack(spacing: 3) {
+                    if items[index].dashed {
+                        Rectangle()
+                            .fill(items[index].color)
+                            .frame(width: 4, height: 2)
+                        Rectangle()
+                            .fill(items[index].color)
+                            .frame(width: 4, height: 2)
+                    } else {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(items[index].color)
+                            .frame(width: 9, height: 7)
+                    }
+                    Text(items[index].label)
+                        .foregroundStyle(ReportStyle.secondary)
+                }
+            }
+        }
+        .font(.system(size: 7.5))
+        .lineLimit(1)
+    }
+
+    private static let insulinLegend = [
+        LegendItem(color: ReportStyle.basal, label: "Basal · Lantus, long-acting"),
+        LegendItem(color: ReportStyle.bolus, label: "Bolus · NovoRapid, rapid-acting"),
+    ]
 
     /// "14-day average: 7.4 mmol/L · 30-day average: … · 90-day average: …"
     private func averages(_ value: @escaping (Report.Window) -> String?) -> some View {
@@ -225,6 +264,12 @@ struct ReportPageView: View {
         let targets = document.targets
         return VStack(alignment: .leading, spacing: 3) {
             chartTitle("Daily profile [2]", unit: document.unit)
+            legend([
+                LegendItem(color: ReportStyle.profileMedian, label: "Median"),
+                LegendItem(color: ReportStyle.profileInner, label: "25–75%"),
+                LegendItem(color: ReportStyle.profileOuter, label: "5–95%"),
+                LegendItem(color: ReportStyle.color(.inRange).opacity(0.25), label: "Target range"),
+            ])
             if bins.count >= 2 {
                 Chart {
                     RectangleMark(xStart: .value("Start", 0.0),
@@ -267,7 +312,7 @@ struct ReportPageView: View {
                     "25–75%": ReportStyle.profileInner,
                     "5–95%": ReportStyle.profileOuter,
                 ])
-                .chartLegend(position: .top, alignment: .leading, spacing: 2)
+                .chartLegend(.hidden)
                 .chartXScale(domain: 0.0...24.0)
                 .chartXAxis { hourAxis }
                 .chartYAxis {
@@ -320,6 +365,7 @@ struct ReportPageView: View {
         let bins = document.activityPlot
         return VStack(alignment: .leading, spacing: 3) {
             chartTitle("Insulin acting through the day [5] [6]", unit: "U per hour")
+            legend(Self.insulinLegend)
             if bins.count >= 2 {
                 Chart {
                     ForEach(bins) { bin in
@@ -335,7 +381,7 @@ struct ReportPageView: View {
                     "Basal": ReportStyle.basal,
                     "Bolus": ReportStyle.bolus,
                 ])
-                .chartLegend(position: .top, alignment: .leading, spacing: 2)
+                .chartLegend(.hidden)
                 .chartXScale(domain: 0.0...24.0)
                 .chartXAxis { hourAxis }
                 .chartYAxis {
@@ -356,16 +402,20 @@ struct ReportPageView: View {
         }
     }
 
-    // MARK: - Page 2: over time
+    // MARK: - Page 2: glucose over time
 
-    private var overTime: some View {
+    private var glucoseOverTime: some View {
         let unit = document.unit
         return VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Over time")
+            sectionTitle("Glucose over time")
 
             dayChart("Estimated A1c [4] and GMI [3]",
                      unit: "%",
-                     height: 125,
+                     height: 190,
+                     legend: [
+                         LegendItem(color: ReportStyle.a1c, label: "Estimated A1c"),
+                         LegendItem(color: ReportStyle.gmi, label: "GMI", dashed: true),
+                     ],
                      averages: { window in
                          guard let mean = window.glucose?.mean else { return nil }
                          let a1c = A1c.fromMeanGlucose(mean, unit: unit).map(A1c.format) ?? "—"
@@ -393,11 +443,11 @@ struct ReportPageView: View {
                 "Estimated A1c": ReportStyle.a1c,
                 "GMI": ReportStyle.gmi,
             ])
-            .chartLegend(position: .top, alignment: .leading, spacing: 2)
+            .chartLegend(.hidden)
 
             dayChart("Mean glucose",
                      unit: unit,
-                     height: 125,
+                     height: 190,
                      averages: { window in
                          window.glucose.map { "\(InsulinStats.formatGlucose($0.mean, unit: unit)) \(unit)" }
                      }) {
@@ -419,10 +469,22 @@ struct ReportPageView: View {
                     .foregroundStyle(ReportStyle.color(.inRange).opacity(0.7))
                     .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 2]))
             }
+        }
+    }
+
+    // MARK: - Page 3: insulin, activity and weight
+
+    private var insulinAndBody: some View {
+        // Three charts when Health has both, taller when it has less.
+        let chartCount = 1 + (document.hasEnergy ? 1 : 0) + (document.hasWeight ? 1 : 0)
+        let height: CGFloat = chartCount == 3 ? 150 : (chartCount == 2 ? 200 : 260)
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Insulin, activity and weight")
 
             dayChart("Insulin",
                      unit: "U per day",
-                     height: 125,
+                     height: height,
+                     legend: Self.insulinLegend,
                      averages: { window in
                          window.insulin.totalPerDay.map { String(format: "%.1f U", $0) }
                      }) {
@@ -441,20 +503,16 @@ struct ReportPageView: View {
                 "Basal": ReportStyle.basal,
                 "Bolus": ReportStyle.bolus,
             ])
-            .chartLegend(position: .top, alignment: .leading, spacing: 2)
-        }
-    }
-
-    // MARK: - Page 3: movement and weight
-
-    private var movement: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Activity and weight")
+            .chartLegend(.hidden)
 
             if document.hasEnergy {
                 dayChart("Active energy",
                          unit: "kcal per day",
-                         height: 200,
+                         height: height,
+                         legend: [
+                             LegendItem(color: ReportStyle.workout, label: "Workouts"),
+                             LegendItem(color: ReportStyle.otherActivity, label: "Other activity"),
+                         ],
                          averages: { window in
                              window.activeEnergyPerDay.map { "\(Int($0.rounded())) kcal" }
                          }) {
@@ -476,13 +534,13 @@ struct ReportPageView: View {
                     "Workouts": ReportStyle.workout,
                     "Other activity": ReportStyle.otherActivity,
                 ])
-                .chartLegend(position: .top, alignment: .leading, spacing: 2)
+                .chartLegend(.hidden)
             }
 
             if document.hasWeight {
                 dayChart("Weight",
                          unit: document.weightUnit,
-                         height: 200,
+                         height: height,
                          yDomain: weightDomain,
                          averages: { window in
                              window.weight.map { "\(String(format: "%.1f", $0)) \(document.weightUnit)" }
@@ -509,6 +567,7 @@ struct ReportPageView: View {
         unit: String,
         height: CGFloat,
         yDomain: ClosedRange<Double>? = nil,
+        legend items: [LegendItem] = [],
         averages value: @escaping (Report.Window) -> String?,
         @ChartContentBuilder content: () -> Content
     ) -> some View {
@@ -542,6 +601,9 @@ struct ReportPageView: View {
 
         return VStack(alignment: .leading, spacing: 3) {
             chartTitle(title, unit: unit)
+            if !items.isEmpty {
+                legend(items)
+            }
             averages(value)
             if let yDomain {
                 chart.chartYScale(domain: yDomain)

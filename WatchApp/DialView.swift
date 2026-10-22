@@ -36,9 +36,20 @@ struct DialView: View {
 
     private let autoSaveDelay: Duration = .seconds(3)
 
-    /// Re-logging the same kind within this window edits the last entry
+    /// Re-logging the **same kind** within this window edits the last entry
     /// instead of adding a new one (correcting a mis-entry).
     private let correctionWindow: TimeInterval = 15
+
+    /// What the last save produced, and what kind it was.
+    ///
+    /// The correction only ever applies to this entry, and only when the new
+    /// value is of the same kind: a bolus is never edited into a basal, a
+    /// basal never into a bolus, and a reading touches neither. Kept here
+    /// rather than looked up in the query, which is the other reason — a row
+    /// inserted a moment ago may not be in `@Query` results yet, and a search
+    /// for "the newest bolus" would then find an older one and add a duplicate
+    /// instead of correcting.
+    @State private var lastSaved: LastSaved?
 
     // MARK: - Dial ladders
 
@@ -351,18 +362,20 @@ struct DialView: View {
 
         let entry: LogEntry
         let wasCorrection: Bool
-        if let recent = allEntries.first(where: { $0.kind == kind }),
-           now.timeIntervalSince(recent.timestamp) <= correctionWindow {
+        if let last = lastSaved,
+           last.kind == kind,
+           now.timeIntervalSince(last.at) <= correctionWindow {
             // Same kind logged moments ago — treat this as a correction.
-            recent.amount = amount
-            recent.timestamp = now
-            entry = recent
+            last.entry.amount = amount
+            last.entry.timestamp = now
+            entry = last.entry
             wasCorrection = true
         } else {
             entry = LogEntry(timestamp: now, kind: kind, amount: amount)
             context.insert(entry)
             wasCorrection = false
         }
+        lastSaved = LastSaved(kind: kind, entry: entry, at: now)
 
         try? context.save()
         ConnectivityManager.shared.send(entry)
@@ -389,4 +402,10 @@ struct DialView: View {
 
 private struct SavedInfo: Equatable {
     let text: String
+}
+
+private struct LastSaved {
+    let kind: EntryKind
+    let entry: LogEntry
+    let at: Date
 }

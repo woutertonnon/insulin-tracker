@@ -26,8 +26,10 @@ enum ReportPDF {
     /// and the number that fit is arithmetic.
     enum Page {
         case summary
-        case overTime
-        case movement
+        /// Glucose over the period: estimated A1c and GMI, mean glucose.
+        case glucoseOverTime
+        /// Insulin, active energy and weight over the period, together.
+        case insulinAndBody
         case notes
         case days(ArraySlice<Report.Day>, continued: Bool)
         case log(ArraySlice<Report.LogLine>, continued: Bool)
@@ -36,9 +38,7 @@ enum ReportPDF {
     static func paginate(_ document: Report.Document,
                          includeLog: Bool,
                          pageSize: CGSize) -> [Page] {
-        var pages: [Page] = [.summary, .overTime]
-        if document.hasEnergy || document.hasWeight { pages.append(.movement) }
-        pages.append(.notes)
+        var pages: [Page] = [.summary, .glucoseOverTime, .insulinAndBody, .notes]
 
         // The title block, the section heading and the column headers sit
         // above a table; 120 points is more than they take, so the rows that

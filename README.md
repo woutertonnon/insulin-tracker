@@ -510,12 +510,13 @@ Pages, in order:
    the median, the 25–75% band and the 5–95% band per half hour. Then basal,
    bolus, total, bolus share, boluses per day and days logged as tiles, and
    **insulin acting through the day** — see below.
-2. **Over time.** Estimated A1c and GMI per day, mean glucose per day, and
-   insulin per day with basal and bolus as parts of one bar. Each chart
-   carries its **14-, 30- and 90-day averages** as `14-day average: 7.4
-   mmol/L` beside its title, whatever period the report covers.
-3. **Activity and weight** — active energy and weight per day, with the same
-   three averages. Left out when Health has neither.
+2. **Glucose over time.** Estimated A1c and GMI per day, and mean glucose per
+   day. Each chart carries its **14-, 30- and 90-day averages** as `14-day
+   average: 7.4 mmol/L` beside its title, whatever period the report covers.
+3. **Insulin, activity and weight.** Insulin per day with basal and bolus as
+   parts of one bar, active energy per day and weight, together on one page
+   so a training block and the notch it puts in insulin line up; the same
+   three averages on each. Charts Health has nothing for are left out.
 4. **Basal and references.** Days with basal, usual dose, dose range and usual
    time as tiles, and the numbered references.
 5. **The day table.** One row per day: CGM coverage, mean, SD, time below, in
