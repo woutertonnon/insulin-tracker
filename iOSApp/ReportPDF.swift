@@ -19,6 +19,45 @@ enum ReportPDF {
     static let margin: CGFloat = 36
     static let rowHeight: CGFloat = 14
 
+    /// Which report: the overview a visit starts from, or one of the two
+    /// event reports, each its own document so it can be sent on its own.
+    enum Kind: String, CaseIterable, Identifiable, Sendable {
+        case overview
+        case lows
+        case highs
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .overview: return "Overview"
+            case .lows: return "Lows"
+            case .highs: return "Highs"
+            }
+        }
+
+        /// On every page, and in the file's name.
+        var documentTitle: String {
+            switch self {
+            case .overview: return "Insulin & glucose report"
+            case .lows: return "Low glucose events"
+            case .highs: return "High glucose events"
+            }
+        }
+
+        var fileStem: String {
+            switch self {
+            case .overview: return "Insulin report"
+            case .lows: return "Low events"
+            case .highs: return "High events"
+            }
+        }
+    }
+
+    /// Events to a page: an event takes a chart and four lines, and three
+    /// fit with the totals above them on the first page taking the room of one.
+    static let eventsPerPage = 3
+
     /// One page of the report.
     ///
     /// Decided up front from counts rather than by measuring text, so a table
@@ -33,11 +72,25 @@ enum ReportPDF {
         case notes
         case days(ArraySlice<Report.Day>, continued: Bool)
         case log(ArraySlice<Report.LogLine>, continued: Bool)
+        /// Low or high events, one panel each. The first page carries the
+        /// definition and the totals; one with no events at all still does,
+        /// and says none.
+        case events(Report.EventKind, ArraySlice<Report.GlucoseEvent>, first: Bool)
     }
 
     static func paginate(_ document: Report.Document,
+                         kind: Kind,
                          includeLog: Bool,
                          pageSize: CGSize) -> [Page] {
+        switch kind {
+        case .overview:
+            break
+        case .lows:
+            return eventPages(.low, document.lows)
+        case .highs:
+            return eventPages(.high, document.highs)
+        }
+
         var pages: [Page] = [.summary, .glucoseOverTime, .insulinAndBody, .notes]
 
         // The title block, the section heading and the column headers sit
@@ -57,6 +110,13 @@ enum ReportPDF {
         return pages
     }
 
+    private static func eventPages(_ kind: Report.EventKind, _ events: [Report.GlucoseEvent]) -> [Page] {
+        let first = Array(events.prefix(eventsPerPage - 1))
+        let rest = Array(events.dropFirst(eventsPerPage - 1))
+        return [Page.events(kind, first[...], first: true)]
+            + chunks(rest, size: eventsPerPage).map { Page.events(kind, $0, first: false) }
+    }
+
     private static func chunks<T>(_ array: [T], size: Int) -> [ArraySlice<T>] {
         guard !array.isEmpty, size > 0 else { return [] }
         return stride(from: array.startIndex, to: array.endIndex, by: size).map { start in
@@ -66,15 +126,15 @@ enum ReportPDF {
 
     /// Draw every page. On the main actor because `ImageRenderer` is.
     @MainActor
-    static func render(_ document: Report.Document, includeLog: Bool) -> Data? {
+    static func render(_ document: Report.Document, kind: Kind, includeLog: Bool) -> Data? {
         let size = pageSize
-        let pages = paginate(document, includeLog: includeLog, pageSize: size)
+        let pages = paginate(document, kind: kind, includeLog: includeLog, pageSize: size)
 
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData) else { return nil }
         var box = CGRect(origin: .zero, size: size)
         let info: [CFString: Any] = [
-            kCGPDFContextTitle: "Insulin & glucose report",
+            kCGPDFContextTitle: kind.documentTitle,
             kCGPDFContextCreator: "Insulin Tracker",
         ]
         guard let context = CGContext(consumer: consumer, mediaBox: &box, info as CFDictionary) else {
@@ -83,6 +143,7 @@ enum ReportPDF {
 
         for (index, page) in pages.enumerated() {
             let view = ReportPageView(page: page,
+                                      title: kind.documentTitle,
                                       document: document,
                                       number: index + 1,
                                       count: pages.count)

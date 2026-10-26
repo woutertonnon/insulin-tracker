@@ -14,6 +14,7 @@ import Charts
 /// carries a legend and every figure its unit.
 struct ReportPageView: View {
     let page: ReportPDF.Page
+    let title: String
     let document: Report.Document
     let number: Int
     let count: Int
@@ -49,6 +50,8 @@ struct ReportPageView: View {
             dayTable(days, continued: continued)
         case .log(let lines, let continued):
             logTable(lines, continued: continued)
+        case .events(let kind, let events, let first):
+            eventsPage(kind, events, first: first)
         }
     }
 
@@ -57,7 +60,7 @@ struct ReportPageView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Insulin & glucose report")
+                Text(title)
                     .font(.system(size: number == 1 ? 18 : 12, weight: .bold))
                 Text("\(rangeText) · \(document.days.count) days")
                     .font(.system(size: 10))
@@ -845,6 +848,282 @@ struct ReportPageView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Low and high events
+
+    private func eventsPage(_ kind: Report.EventKind,
+                            _ events: ArraySlice<Report.GlucoseEvent>,
+                            first: Bool) -> some View {
+        let all = kind == .low ? document.lows : document.highs
+        let thresholds = document.eventThresholds
+        let name = kind == .low ? "Low events" : "High events"
+        return VStack(alignment: .leading, spacing: 10) {
+            if first {
+                sectionTitle(name)
+                HStack(spacing: 3) {
+                    Text("Definition:")
+                        .foregroundStyle(ReportStyle.secondary)
+                    Text(kind == .low ? thresholds.lowDefinition : thresholds.highDefinition)
+                    Text("· from CGM · ends 15 min back across the line, or at a CGM gap > 20 min")
+                        .foregroundStyle(ReportStyle.secondary)
+                }
+                .font(.system(size: 8))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                eventTiles(kind, all)
+                legend(Self.eventLegend(kind))
+                eventReferences
+                if all.isEmpty {
+                    Text("None in this period.")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.top, 8)
+                }
+            } else {
+                sectionTitle(name + " (continued)")
+            }
+            ForEach(Array(events)) { event in
+                eventPanel(event)
+            }
+        }
+    }
+
+    private func eventTiles(_ kind: Report.EventKind, _ events: [Report.GlucoseEvent]) -> some View {
+        let unit = document.unit
+        let minutes = events.map(\.minutes).sorted()
+        let total = minutes.reduce(0, +)
+        let median = minutes.isEmpty ? nil : minutes[minutes.count / 2]
+        let overnight = events.filter {
+            (Calendar.current.dateComponents([.hour], from: $0.start).hour ?? 12) < 6
+        }.count
+        let extreme = kind == .low ? events.map(\.extreme).min() : events.map(\.extreme).max()
+        let weeks = Double(document.days.count) / 7
+        return HStack(spacing: 6) {
+            StatTile(title: "Events",
+                     value: String(events.count),
+                     unit: weeks > 0 ? String(format: "%.1f per week", Double(events.count) / weeks) : "")
+            StatTile(title: "Time in events",
+                     value: Self.formatMinutes(total),
+                     unit: "total")
+            StatTile(title: "Usual length",
+                     value: median.map(Self.formatMinutes) ?? "—",
+                     unit: "median")
+            StatTile(title: "Overnight",
+                     value: String(overnight),
+                     unit: "starting 00:00–06:00")
+            StatTile(title: kind == .low ? "Lowest" : "Highest",
+                     value: extreme.map { InsulinStats.formatGlucose($0, unit: unit) } ?? "—",
+                     unit: unit)
+        }
+    }
+
+    private static func eventLegend(_ kind: Report.EventKind) -> [LegendItem] {
+        [
+            LegendItem(color: kind == .low ? ReportStyle.color(.low) : ReportStyle.color(.high), label: "Event"),
+            LegendItem(color: ReportStyle.profileMedian, label: "CGM"),
+            LegendItem(color: ReportStyle.ink, label: "Meter ●"),
+            LegendItem(color: ReportStyle.a1c, label: "Meter, temperature-adjusted ◆ [2]"),
+            LegendItem(color: ReportStyle.bolus, label: "Bolus"),
+            LegendItem(color: ReportStyle.basal, label: "Basal"),
+            LegendItem(color: ReportStyle.workout, label: "Workout"),
+        ]
+    }
+
+    /// What the event pages cite, numbered for these pages.
+    private static let eventReferenceList: [String] = [
+        "Bolus on board: Scheiner G. Think Like a Pancreas, Table 7-8, \"IOB based on time since bolus was given\", 4 h duration.",
+        references[6],
+        references[7],
+    ]
+
+    private var eventReferences: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Self.eventReferenceList.indices, id: \.self) { index in
+                HStack(alignment: .top, spacing: 4) {
+                    Text("[\(index + 1)]")
+                        .frame(width: 14, alignment: .leading)
+                    Text(Self.eventReferenceList[index])
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .font(.system(size: 6.5))
+        .foregroundStyle(ReportStyle.muted)
+    }
+
+    private func eventPanel(_ event: Report.GlucoseEvent) -> some View {
+        let unit = document.unit
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(Self.shortDay.string(from: event.start)) \(Self.time.string(from: event.start))–\(Self.time.string(from: event.end))")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(Self.formatMinutes(event.minutes))
+                    .foregroundStyle(ReportStyle.secondary)
+                if event.reachedUrgent {
+                    Text("below \(document.eventThresholds.format(document.eventThresholds.urgentLow))")
+                        .foregroundStyle(ReportStyle.color(.veryLow))
+                }
+                Spacer()
+                Text("\(event.kind == .low ? "Lowest" : "Highest") \(InsulinStats.formatGlucose(event.extreme, unit: unit)) \(unit) at \(Self.time.string(from: event.extremeAt))")
+                    .font(.system(size: 8.5, weight: .medium).monospacedDigit())
+            }
+            eventChart(event)
+                .frame(height: 100)
+            detailLine("Insulin", insulinText(event))
+            detailLine("Exercise", exerciseText(event))
+            detailLine("Meter", meterText(event))
+        }
+        .padding(6)
+        .background(ReportStyle.surface, in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    private func detailLine(_ label: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(label)
+                .font(.system(size: 7.5, weight: .semibold))
+                .foregroundStyle(ReportStyle.secondary)
+                .frame(width: 42, alignment: .leading)
+            Text(text)
+                .font(.system(size: 8).monospacedDigit())
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A time, with its day when it is not the event's.
+    private func when(_ date: Date, in event: Report.GlucoseEvent) -> String {
+        Calendar.current.isDate(date, inSameDayAs: event.start)
+            ? Self.time.string(from: date)
+            : "\(Self.shortDay.string(from: date)) \(Self.time.string(from: date))"
+    }
+
+    private func insulinText(_ event: Report.GlucoseEvent) -> String {
+        var parts = event.doses.map { dose in
+            "\(Report.title(for: dose.kind)) \(Report.formatAmount(kind: dose.kind, amount: dose.amount, unit: GlucoseUnit(label: document.unit))) \(when(dose.date, in: event))"
+        }
+        if parts.isEmpty { parts = ["no bolus in the 4 h before, no basal in the 30 h before"] }
+        parts.append("bolus on board at start \(Report.formatUnits((event.bolusOnBoard * 10).rounded() / 10)) U [1]")
+        return parts.joined(separator: " · ")
+    }
+
+    private func exerciseText(_ event: Report.GlucoseEvent) -> String {
+        guard !event.workouts.isEmpty else { return "none in the 6 h before or during" }
+        return event.workouts.map { workout in
+            var text = "\(workout.name) \(when(workout.start, in: event))–\(Self.time.string(from: workout.end)), \(workout.minutes) min"
+            if let kilocalories = workout.kilocalories { text += ", \(Int(kilocalories.rounded())) kcal" }
+            if !workout.outdoors { text += ", indoors" }
+            return text
+        }.joined(separator: " · ")
+    }
+
+    private func meterText(_ event: Report.GlucoseEvent) -> String {
+        guard !event.meter.isEmpty else { return "none from an hour before to an hour after" }
+        let unit = GlucoseUnit(label: document.unit)
+        return event.meter.map { reading in
+            var text = "\(when(reading.date, in: event)) \(unit.format(reading.value))"
+            if let celsius = reading.celsius, let adjusted = reading.adjusted {
+                text += " outdoors \(Temperature.format(celsius: celsius)) [3] → adj. \(unit.format(adjusted)) [2]"
+            }
+            return text
+        }.joined(separator: " · ") + " \(unit.label)"
+    }
+
+    private func eventChart(_ event: Report.GlucoseEvent) -> some View {
+        let meterUnit = GlucoseUnit(label: document.unit)
+        let thresholds = document.eventThresholds
+        let lines = event.kind == .low ? [thresholds.urgentLow, thresholds.low] : [thresholds.high]
+        let meterValues = event.meter.flatMap { reading in
+            [meterUnit.display(reading.value)] + (reading.adjusted.map { [meterUnit.display($0)] } ?? [])
+        }
+        let values = event.cgm.map(\.value) + meterValues + lines
+        let low = values.min() ?? 0
+        let high = values.max() ?? 1
+        let pad = max((high - low) * 0.08, meterUnit.step * 2)
+        let domain = max(0, low - pad)...(high + pad)
+        let shown = event.doses.filter { event.context.contains($0.date) }
+        let workouts = event.workouts.filter { $0.end > event.context.lowerBound && $0.start < event.context.upperBound }
+        let tint = event.kind == .low ? ReportStyle.color(.low) : ReportStyle.color(.high)
+
+        return Chart {
+            RectangleMark(xStart: .value("Start", event.start), xEnd: .value("End", event.end))
+                .foregroundStyle(tint.opacity(0.15))
+            ForEach(workouts.indices, id: \.self) { index in
+                RectangleMark(xStart: .value("Start", max(workouts[index].start, event.context.lowerBound)),
+                              xEnd: .value("End", min(workouts[index].end, event.context.upperBound)))
+                    .foregroundStyle(ReportStyle.workout.opacity(0.12))
+            }
+            ForEach(lines.indices, id: \.self) { index in
+                RuleMark(y: .value("Line", lines[index]))
+                    .foregroundStyle(tint.opacity(0.8))
+                    .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 2]))
+            }
+            ForEach(event.cgm.indices, id: \.self) { index in
+                LineMark(x: .value("Time", event.cgm[index].date),
+                         y: .value("Glucose", event.cgm[index].value),
+                         series: .value("Series", "CGM"))
+                    .foregroundStyle(ReportStyle.profileMedian)
+                    .lineStyle(StrokeStyle(lineWidth: 1.1))
+            }
+            ForEach(shown.indices, id: \.self) { index in
+                let dose = shown[index]
+                RuleMark(x: .value("Dose", dose.date))
+                    .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
+                    .lineStyle(StrokeStyle(lineWidth: 0.8))
+                    .annotation(position: .trailing, alignment: .top, spacing: 1) {
+                        Text("\(Report.formatUnits(dose.amount)) U")
+                            .font(.system(size: 6.5, weight: .semibold))
+                            .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
+                    }
+            }
+            ForEach(event.meter.indices, id: \.self) { index in
+                let reading = event.meter[index]
+                let raw = meterUnit.display(reading.value)
+                if let adjusted = reading.adjusted.map(meterUnit.display) {
+                    RuleMark(x: .value("Time", reading.date),
+                             yStart: .value("Meter", raw),
+                             yEnd: .value("Adjusted", adjusted))
+                        .foregroundStyle(ReportStyle.a1c.opacity(0.7))
+                        .lineStyle(StrokeStyle(lineWidth: 0.8))
+                    PointMark(x: .value("Time", reading.date), y: .value("Adjusted", adjusted))
+                        .symbol(.diamond)
+                        .symbolSize(22)
+                        .foregroundStyle(ReportStyle.a1c)
+                }
+                PointMark(x: .value("Time", reading.date), y: .value("Meter", raw))
+                    .symbol(.circle)
+                    .symbolSize(18)
+                    .foregroundStyle(ReportStyle.ink)
+            }
+        }
+        .chartXScale(domain: event.context)
+        .chartYScale(domain: domain)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 8)) { _ in
+                AxisGridLine().foregroundStyle(ReportStyle.grid)
+                AxisValueLabel(format: .dateTime.hour().minute())
+                    .font(.system(size: 7))
+                    .foregroundStyle(ReportStyle.secondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine().foregroundStyle(ReportStyle.grid)
+                AxisValueLabel {
+                    Text(Self.axisLabel(value))
+                        .font(.system(size: 7))
+                        .frame(width: 28, alignment: .trailing)
+                        .foregroundStyle(ReportStyle.secondary)
+                }
+            }
+        }
+        .font(.system(size: 7.5))
+    }
+
+    /// "45 min", "2 h 05 min"
+    private static func formatMinutes(_ minutes: Int) -> String {
+        if minutes < 60 { return "\(minutes) min" }
+        return "\(minutes / 60) h \(String(format: "%02d", minutes % 60)) min"
     }
 
     // MARK: - Formatting

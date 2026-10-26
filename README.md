@@ -677,6 +677,36 @@ Pages, in order:
    reading — with the outside temperature and the adjusted value where known —
    and workout in time order, two columns to a page. Off by default.
 
+### Low and high events
+
+Two more reports beside the overview, each its own PDF so it can be sent on
+its own: **Lows** and **Highs**, chosen at the top of the report screen, over
+the same period. Both are read off the CGM.
+
+- **Low** — below 60 mg/dL (3.3 mmol/L) at any point, or below 70 mg/dL
+  (3.9) for 30 minutes or longer.
+- **High** — above 180 mg/dL (10.0 mmol/L) for an hour or longer.
+
+The edges are set in mg/dL and converted exactly, so a trace gives the same
+events in either unit. An event ends once glucose has been back across the
+line for 15 minutes, as in the consensus definition of a CGM event, so one
+reading bouncing over the line does not split a low in two; a CGM gap longer
+than 20 minutes ends it too, since nothing is known past it.
+
+The first page has the definition, the totals — events, events per week, time
+in events, median length, how many began overnight, the lowest or highest —
+a legend and the references. Then one panel per event, three to a page: the
+day, start, end and length; the lowest or highest value and when; a chart from
+four hours before to an hour after, with the CGM, the threshold lines, the
+event shaded, workouts shaded, each dose as a line with its units, and each
+finger-prick as a dot with, when it was taken outside, a diamond at its
+temperature-adjusted value; and three lines beneath — **insulin** (boluses in
+the four hours before through the end, the last basal in the 30 hours before,
+and bolus on board at the start), **exercise** (workouts in the six hours
+before through the end, since a low can follow exercise by hours), and
+**meter** (finger-pricks from an hour before to an hour after, each with the
+outside temperature and adjusted value where it was taken outside).
+
 ### Insulin acting through the day
 
 The chart on page one that a CGM report cannot have: for a typical day of the

@@ -23,6 +23,13 @@ struct ReportView: View {
     @AppStorage("reportIncludesLog")
     private var includeLog = false
 
+    @AppStorage("reportKind")
+    private var kindRaw = ReportPDF.Kind.overview.rawValue
+
+    private var kind: ReportPDF.Kind {
+        ReportPDF.Kind(rawValue: kindRaw) ?? .overview
+    }
+
     @State private var pdf: Data?
     @State private var fileURL: URL?
     @State private var isBuilding = false
@@ -54,11 +61,19 @@ struct ReportView: View {
         .task { await rebuild() }
         .onChange(of: periodDays) { _, _ in rebuild() }
         .onChange(of: includeLog) { _, _ in rebuild() }
+        .onChange(of: kindRaw) { _, _ in rebuild() }
         .onDisappear { build?.cancel() }
     }
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Picker("Report", selection: $kindRaw) {
+                ForEach(ReportPDF.Kind.allCases) { kind in
+                    Text(kind.title).tag(kind.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Picker("Period", selection: $periodDays) {
                 ForEach(Report.Period.allCases) { period in
                     Text(period.title).tag(period.rawValue)
@@ -66,13 +81,24 @@ struct ReportView: View {
             }
             .pickerStyle(.segmented)
 
-            Toggle(isOn: $includeLog) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Append every entry")
-                    Text("Each injection, meter reading and workout in time order. Adds pages.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            switch kind {
+            case .overview:
+                Toggle(isOn: $includeLog) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Append every entry")
+                        Text("Each injection, meter reading and workout in time order. Adds pages.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+            case .lows:
+                Text("Every low from the CGM — under 60 mg/dL, or under 70 mg/dL for 30 minutes — with the insulin, exercise and finger-pricks around it.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            case .highs:
+                Text("Every high from the CGM — over 180 mg/dL for an hour — with the insulin, exercise and finger-pricks around it.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             Text("Whole days ending yesterday. Share, print or save with the button above.")
@@ -110,6 +136,7 @@ struct ReportView: View {
         // should cross to the thread the numbers are built on.
         let period = self.period
         let includeLog = self.includeLog
+        let kind = self.kind
         let now = Date.now
         let unit = health.glucoseUnitLabel
         let weightUnit = health.weightUnitLabel
@@ -145,11 +172,11 @@ struct ReportView: View {
             }.value
             if Task.isCancelled { return }
 
-            let data = ReportPDF.render(document, includeLog: includeLog)
+            let data = ReportPDF.render(document, kind: kind, includeLog: includeLog)
             if Task.isCancelled { return }
 
             pdf = data
-            fileURL = data.flatMap { try? ReportPDF.write($0, named: document.fileName) }
+            fileURL = data.flatMap { try? ReportPDF.write($0, named: document.fileName(kind.fileStem)) }
             isBuilding = false
         }
     }

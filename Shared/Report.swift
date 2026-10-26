@@ -480,6 +480,10 @@ enum Report {
         let activity: [ActivityBin]
         let workouts: [Workout]
         let log: [LogLine]
+        /// Low and high events starting in the period — see `GlucoseEvents`.
+        let eventThresholds: EventThresholds
+        let lows: [GlucoseEvent]
+        let highs: [GlucoseEvent]
 
         var unit: String { targets.unit }
 
@@ -504,9 +508,10 @@ enum Report {
         var hasEnergy: Bool { days.contains { $0.activeEnergy != nil } }
         var hasWeight: Bool { days.contains { $0.weight != nil } }
 
-        /// "Insulin report 2026-07-22 to 2026-10-19.pdf"
-        var fileName: String {
-            "Insulin report \(Report.isoDay.string(from: start)) to \(Report.isoDay.string(from: lastDay)).pdf"
+        /// "Insulin report 2026-07-22 to 2026-10-19.pdf",
+        /// "Low events 2026-07-22 to 2026-10-19.pdf"
+        func fileName(_ name: String) -> String {
+            "\(name) \(Report.isoDay.string(from: start)) to \(Report.isoDay.string(from: lastDay)).pdf"
         }
     }
 
@@ -636,6 +641,26 @@ enum Report {
                            amount: $0.element.amount,
                            isWorkout: $0.element.isWorkout) }
 
+        // Read from the whole CGM record, not the period's slice of it, so an
+        // event that starts on the last evening is followed past midnight
+        // and its chart has the hours before the first morning.
+        let allGlucose = glucose.sorted { $0.date < $1.date }
+        let allEvents = events.sorted { $0.date < $1.date }
+        let allOutings = workouts.compactMap {
+            $0.start <= $0.end ? Temperature.Outing(span: $0.start...$0.end, outdoors: $0.outdoors) : nil
+        }
+        let thresholds = EventThresholds.standard(unit: glucoseUnit)
+        func glucoseEvents(_ kind: EventKind) -> [GlucoseEvent] {
+            Report.glucoseEvents(kind,
+                                 thresholds: thresholds,
+                                 glucose: allGlucose,
+                                 period: start..<end,
+                                 events: allEvents,
+                                 workouts: workouts.sorted { $0.start < $1.start },
+                                 outings: allOutings,
+                                 marks: marks)
+        }
+
         return Document(period: period,
                         start: start,
                         end: end,
@@ -653,7 +678,10 @@ enum Report {
                                                   firstEvent: firstEvent,
                                                   calendar: calendar),
                         workouts: chosenWorkouts,
-                        log: log)
+                        log: log,
+                        eventThresholds: thresholds,
+                        lows: glucoseEvents(.low),
+                        highs: glucoseEvents(.high))
     }
 
     private static func summariseInsulin(days: [Day],
@@ -711,17 +739,7 @@ enum Report {
         var amount = formatAmount(kind: event.kind, amount: event.amount, unit: unit)
         // A reading taken outside carries the air it was taken in and the
         // value corrected for it — see `Temperature`. Indoors, neither.
-        var outdoors = event.outdoors ?? false
-        if event.outdoors == nil {
-            // A row from before the badge: decided the way the watch would have.
-            var knownIndoors = false
-            if let latitude = event.latitude, let longitude = event.longitude {
-                knownIndoors = Temperature.isKnownIndoors(latitude: latitude, longitude: longitude, marks: marks)
-            }
-            outdoors = Temperature.isOutdoors(at: event.date, marked: nil, knownIndoors: knownIndoors,
-                                              outings: outings, moving: event.moving)
-        }
-        if event.kind == .glucose, let celsius = event.temperature, outdoors {
+        if let celsius = outsideAir(event, outings: outings, marks: marks) {
             let adjusted = Temperature.adjustedGlucose(event.amount, celsius: celsius)
             amount += " · \(Temperature.format(celsius: celsius)) · adj. \(unit.format(adjusted))"
         }
