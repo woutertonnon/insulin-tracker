@@ -204,7 +204,7 @@ enum Report {
 
     /// Longest gap between readings still counted as covered, as everywhere
     /// else in the app.
-    private static let maximumGap: TimeInterval = 20 * 60
+    static let maximumGap: TimeInterval = 20 * 60
 
     /// Requires `readings` sorted ascending. Nil when there are none, which is
     /// not the same claim as a zero.
