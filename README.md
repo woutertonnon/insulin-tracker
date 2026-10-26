@@ -700,8 +700,7 @@ The first page has the definition, the totals — events, events per week, time
 in events, median length, how many began overnight, the lowest or highest —
 a legend and the references. Then one panel per event, newest first, three to a page: the day, start, end
 and length, and the lowest or highest value and when; then two charts on one
-time axis, in one box, running from four hours before to an hour after a low
-and three after a high. Above, **glucose**: the CGM, the threshold lines, and
+time axis, in one box, running from four hours before to three hours after. Above, **glucose**: the CGM, the threshold lines, and
 each finger-prick as a dot with, when it was taken outside, a diamond at its
 temperature-adjusted value. Below, **insulin**: basal and bolus acting, in
 units per hour, stacked — the same curves as the overview — with each dose as

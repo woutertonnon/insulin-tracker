@@ -119,12 +119,10 @@ extension Report {
     private static let workoutLookBack: TimeInterval = 6 * 3600
     private static let meterMargin: TimeInterval = 3600
 
-    /// How long the chart runs on after the end: an hour after a low, three
-    /// after a high — what came down and what went back up is the question
-    /// a high leaves.
-    private static func chartAfter(_ kind: EventKind) -> TimeInterval {
-        kind == .low ? 3600 : 3 * 3600
-    }
+    /// How long the chart runs on after the end: three hours, for a low as
+    /// for a high — the rebound after the treatment, the correction that
+    /// brought a high down or did not.
+    private static let chartAfter: TimeInterval = 3 * 3600
 
     /// A high that begins within this long of the last one ending is the same
     /// high: the correction that did not hold, or the meal after it.
@@ -231,7 +229,7 @@ extension Report {
         // The four hours a bolus acts for before the start, to the chart's
         // margin after the end.
         let from = start.addingTimeInterval(-doseLookBack)
-        let to = end.addingTimeInterval(chartAfter(kind))
+        let to = end.addingTimeInterval(chartAfter)
 
         let boluses = events.filter {
             $0.kind == .insulin && $0.date >= from && $0.date <= to
