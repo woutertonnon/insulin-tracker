@@ -695,7 +695,7 @@ than 20 minutes ends it too, since nothing is known past it.
 
 The first page has the definition, the totals — events, events per week, time
 in events, median length, how many began overnight, the lowest or highest —
-a legend and the references. Then one panel per event, three to a page: the
+a legend and the references. Then one panel per event, newest first, three to a page: the
 day, start, end and length; the lowest or highest value and when; a chart from
 four hours before to an hour after, with the CGM, the threshold lines, the
 event shaded, workouts shaded, each dose as a line with its units, and each

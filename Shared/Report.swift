@@ -480,7 +480,8 @@ enum Report {
         let activity: [ActivityBin]
         let workouts: [Workout]
         let log: [LogLine]
-        /// Low and high events starting in the period — see `GlucoseEvents`.
+        /// Low and high events starting in the period, newest first — the
+        /// one a visit asks about first is the latest — see `GlucoseEvents`.
         let eventThresholds: EventThresholds
         let lows: [GlucoseEvent]
         let highs: [GlucoseEvent]
@@ -680,8 +681,8 @@ enum Report {
                         workouts: chosenWorkouts,
                         log: log,
                         eventThresholds: thresholds,
-                        lows: glucoseEvents(.low),
-                        highs: glucoseEvents(.high))
+                        lows: glucoseEvents(.low).reversed(),
+                        highs: glucoseEvents(.high).reversed())
     }
 
     private static func summariseInsulin(days: [Day],
