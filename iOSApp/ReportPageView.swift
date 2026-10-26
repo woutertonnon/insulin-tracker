@@ -923,20 +923,21 @@ struct ReportPageView: View {
     private static func eventLegend(_ kind: Report.EventKind) -> [LegendItem] {
         [
             LegendItem(color: kind == .low ? ReportStyle.color(.low) : ReportStyle.color(.high), label: "Event"),
+            LegendItem(color: ReportStyle.workout, label: "Workout"),
             LegendItem(color: ReportStyle.profileMedian, label: "CGM"),
             LegendItem(color: ReportStyle.ink, label: "Meter ●"),
-            LegendItem(color: ReportStyle.a1c, label: "Meter, temperature-adjusted ◆ [2]"),
-            LegendItem(color: ReportStyle.bolus, label: "Bolus · dose, U/h acting"),
-            LegendItem(color: ReportStyle.basal, label: "Basal · dose, U/h acting"),
-            LegendItem(color: ReportStyle.workout, label: "Workout"),
+            LegendItem(color: ReportStyle.a1c, label: "Meter, temperature-adjusted ◆ [1, 2]"),
+            LegendItem(color: ReportStyle.bolus, label: "Bolus · dose, acting [3]"),
+            LegendItem(color: ReportStyle.basal, label: "Basal · dose, acting [4]"),
         ]
     }
 
     /// What the event pages cite, numbered for these pages.
     private static let eventReferenceList: [String] = [
-        "Bolus on board: Scheiner G. Think Like a Pancreas, Table 7-8, \"IOB based on time since bolus was given\", 4 h duration.",
         references[6],
         references[7],
+        references[4],
+        references[5],
     ]
 
     private var eventReferences: some View {
@@ -954,6 +955,8 @@ struct ReportPageView: View {
         .foregroundStyle(ReportStyle.muted)
     }
 
+    /// The event's line, then glucose above and insulin acting below — two
+    /// charts on one time axis, in one box.
     private func eventPanel(_ event: Report.GlucoseEvent) -> some View {
         let unit = document.unit
         return VStack(alignment: .leading, spacing: 3) {
@@ -974,69 +977,39 @@ struct ReportPageView: View {
                 Text("\(event.kind == .low ? "Lowest" : "Highest") \(InsulinStats.formatGlucose(event.extreme, unit: unit)) \(unit) at \(Self.time.string(from: event.extremeAt))")
                     .font(.system(size: 8.5, weight: .medium).monospacedDigit())
             }
-            eventChart(event)
-                .frame(height: 120)
-            detailLine("Insulin", insulinText(event))
-            detailLine("Exercise", exerciseText(event))
-            detailLine("Meter", meterText(event))
+            eventAxisTitle(unit)
+            glucoseEventChart(event)
+                .frame(height: 100)
+            eventAxisTitle("U/h acting")
+            insulinEventChart(event)
+                .frame(height: 50)
         }
         .padding(6)
         .background(ReportStyle.surface, in: RoundedRectangle(cornerRadius: 4))
     }
 
-    private func detailLine(_ label: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(label)
-                .font(.system(size: 7.5, weight: .semibold))
-                .foregroundStyle(ReportStyle.secondary)
-                .frame(width: 42, alignment: .leading)
-            Text(text)
-                .font(.system(size: 8).monospacedDigit())
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-                .fixedSize(horizontal: false, vertical: true)
+    private func eventAxisTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 6.5))
+            .foregroundStyle(ReportStyle.muted)
+    }
+
+    /// The event and the workouts around it, shaded the same on both charts
+    /// so the two read as one.
+    @ChartContentBuilder
+    private func eventBackdrop(_ event: Report.GlucoseEvent) -> some ChartContent {
+        let tint = event.kind == .low ? ReportStyle.color(.low) : ReportStyle.color(.high)
+        let workouts = event.workouts.filter { $0.end > event.context.lowerBound && $0.start < event.context.upperBound }
+        RectangleMark(xStart: .value("Start", event.start), xEnd: .value("End", event.end))
+            .foregroundStyle(tint.opacity(0.15))
+        ForEach(workouts.indices, id: \.self) { index in
+            RectangleMark(xStart: .value("Start", max(workouts[index].start, event.context.lowerBound)),
+                          xEnd: .value("End", min(workouts[index].end, event.context.upperBound)))
+                .foregroundStyle(ReportStyle.workout.opacity(0.12))
         }
     }
 
-    /// A time, with its day when it is not the event's.
-    private func when(_ date: Date, in event: Report.GlucoseEvent) -> String {
-        Calendar.current.isDate(date, inSameDayAs: event.start)
-            ? Self.time.string(from: date)
-            : "\(Self.shortDay.string(from: date)) \(Self.time.string(from: date))"
-    }
-
-    private func insulinText(_ event: Report.GlucoseEvent) -> String {
-        var parts = event.doses.map { dose in
-            "\(Report.title(for: dose.kind)) \(Report.formatAmount(kind: dose.kind, amount: dose.amount, unit: GlucoseUnit(label: document.unit))) \(when(dose.date, in: event))"
-        }
-        if parts.isEmpty { parts = ["no bolus in the 4 h before, no basal in the 30 h before"] }
-        parts.append("bolus on board at start \(Report.formatUnits((event.bolusOnBoard * 10).rounded() / 10)) U [1]")
-        return parts.joined(separator: " · ")
-    }
-
-    private func exerciseText(_ event: Report.GlucoseEvent) -> String {
-        guard !event.workouts.isEmpty else { return "none in the 6 h before or during" }
-        return event.workouts.map { workout in
-            var text = "\(workout.name) \(when(workout.start, in: event))–\(Self.time.string(from: workout.end)), \(workout.minutes) min"
-            if let kilocalories = workout.kilocalories { text += ", \(Int(kilocalories.rounded())) kcal" }
-            if !workout.outdoors { text += ", indoors" }
-            return text
-        }.joined(separator: " · ")
-    }
-
-    private func meterText(_ event: Report.GlucoseEvent) -> String {
-        guard !event.meter.isEmpty else { return "none from an hour before to an hour after" }
-        let unit = GlucoseUnit(label: document.unit)
-        return event.meter.map { reading in
-            var text = "\(when(reading.date, in: event)) \(unit.format(reading.value))"
-            if let celsius = reading.celsius, let adjusted = reading.adjusted {
-                text += " outdoors \(Temperature.format(celsius: celsius)) [3] → adj. \(unit.format(adjusted)) [2]"
-            }
-            return text
-        }.joined(separator: " · ") + " \(unit.label)"
-    }
-
-    private func eventChart(_ event: Report.GlucoseEvent) -> some View {
+    private func glucoseEventChart(_ event: Report.GlucoseEvent) -> some View {
         let meterUnit = GlucoseUnit(label: document.unit)
         let thresholds = document.eventThresholds
         let lines = event.kind == .low ? [thresholds.urgentLow, thresholds.low] : [thresholds.high]
@@ -1047,45 +1020,10 @@ struct ReportPageView: View {
         let low = values.min() ?? 0
         let high = values.max() ?? 1
         let pad = max((high - low) * 0.08, meterUnit.step * 2)
-        let glucoseTop = high + pad
-        let glucoseBottom = max(0, low - pad)
-
-        // Insulin acting sits in a band of its own beneath the glucose, on
-        // its own scale, read off the right-hand axis: the glucose axis on
-        // the left stops where the band begins.
-        let band = (glucoseTop - glucoseBottom) * 0.45
-        let rateScale = Self.niceRateCeiling(event.activity.map(\.total).max() ?? 0)
-        let bandBottom = glucoseBottom - band
-        let bandHeight = band * 0.9
-        let y: (Double) -> Double = { bandBottom + $0 / rateScale * bandHeight }
-        let rateTicks = [0, rateScale / 2, rateScale]
-
-        let shown = event.doses.filter { event.context.contains($0.date) }
-        let workouts = event.workouts.filter { $0.end > event.context.lowerBound && $0.start < event.context.upperBound }
         let tint = event.kind == .low ? ReportStyle.color(.low) : ReportStyle.color(.high)
 
         return Chart {
-            RectangleMark(xStart: .value("Start", event.start), xEnd: .value("End", event.end))
-                .foregroundStyle(tint.opacity(0.15))
-            ForEach(workouts.indices, id: \.self) { index in
-                RectangleMark(xStart: .value("Start", max(workouts[index].start, event.context.lowerBound)),
-                              xEnd: .value("End", min(workouts[index].end, event.context.upperBound)))
-                    .foregroundStyle(ReportStyle.workout.opacity(0.12))
-            }
-            ForEach(event.activity.indices, id: \.self) { index in
-                let sample = event.activity[index]
-                AreaMark(x: .value("Time", sample.date),
-                         yStart: .value("Rate", y(0)),
-                         yEnd: .value("Rate", y(sample.basal)))
-                    .foregroundStyle(by: .value("Insulin", "Basal"))
-                AreaMark(x: .value("Time", sample.date),
-                         yStart: .value("Rate", y(sample.basal)),
-                         yEnd: .value("Rate", y(sample.total)))
-                    .foregroundStyle(by: .value("Insulin", "Bolus"))
-            }
-            RuleMark(y: .value("Band", glucoseBottom))
-                .foregroundStyle(ReportStyle.rule)
-                .lineStyle(StrokeStyle(lineWidth: 0.5))
+            eventBackdrop(event)
             ForEach(lines.indices, id: \.self) { index in
                 RuleMark(y: .value("Line", lines[index]))
                     .foregroundStyle(tint.opacity(0.8))
@@ -1097,17 +1035,6 @@ struct ReportPageView: View {
                          series: .value("Series", "CGM"))
                     .foregroundStyle(ReportStyle.profileMedian)
                     .lineStyle(StrokeStyle(lineWidth: 1.1))
-            }
-            ForEach(shown.indices, id: \.self) { index in
-                let dose = shown[index]
-                RuleMark(x: .value("Dose", dose.date))
-                    .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
-                    .lineStyle(StrokeStyle(lineWidth: 0.8))
-                    .annotation(position: .trailing, alignment: .top, spacing: 1) {
-                        Text("\(Report.formatUnits(dose.amount)) U")
-                            .font(.system(size: 6.5, weight: .semibold))
-                            .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
-                    }
             }
             ForEach(event.meter.indices, id: \.self) { index in
                 let reading = event.meter[index]
@@ -1129,13 +1056,54 @@ struct ReportPageView: View {
                     .foregroundStyle(ReportStyle.ink)
             }
         }
+        .chartXScale(domain: event.context)
+        .chartYScale(domain: max(0, low - pad)...(high + pad))
+        // Times under the insulin chart only; the grid lines up through both.
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 8)) { _ in
+                AxisGridLine().foregroundStyle(ReportStyle.grid)
+            }
+        }
+        .chartYAxis { eventYAxis(desiredCount: 4) }
+        .font(.system(size: 7.5))
+    }
+
+    private func insulinEventChart(_ event: Report.GlucoseEvent) -> some View {
+        let shown = event.doses.filter { event.context.contains($0.date) }
+        let top = Self.niceRateCeiling(event.activity.map(\.total).max() ?? 0)
+
+        return Chart {
+            eventBackdrop(event)
+            ForEach(event.activity.indices, id: \.self) { index in
+                let sample = event.activity[index]
+                AreaMark(x: .value("Time", sample.date),
+                         yStart: .value("U/h", 0.0),
+                         yEnd: .value("U/h", sample.basal))
+                    .foregroundStyle(by: .value("Insulin", "Basal"))
+                AreaMark(x: .value("Time", sample.date),
+                         yStart: .value("U/h", sample.basal),
+                         yEnd: .value("U/h", sample.total))
+                    .foregroundStyle(by: .value("Insulin", "Bolus"))
+            }
+            ForEach(shown.indices, id: \.self) { index in
+                let dose = shown[index]
+                RuleMark(x: .value("Dose", dose.date))
+                    .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
+                    .lineStyle(StrokeStyle(lineWidth: 0.8))
+                    .annotation(position: .trailing, alignment: .top, spacing: 1) {
+                        Text("\(Report.formatUnits(dose.amount)) U")
+                            .font(.system(size: 6.5, weight: .semibold))
+                            .foregroundStyle(dose.kind == .basal ? ReportStyle.basal : ReportStyle.bolus)
+                    }
+            }
+        }
         .chartForegroundStyleScale([
-            "Basal": ReportStyle.basal.opacity(0.4),
-            "Bolus": ReportStyle.bolus.opacity(0.5),
+            "Basal": ReportStyle.basal.opacity(0.45),
+            "Bolus": ReportStyle.bolus.opacity(0.55),
         ])
         .chartLegend(.hidden)
         .chartXScale(domain: event.context)
-        .chartYScale(domain: bandBottom...glucoseTop)
+        .chartYScale(domain: 0...top)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 8)) { _ in
                 AxisGridLine().foregroundStyle(ReportStyle.grid)
@@ -1144,56 +1112,29 @@ struct ReportPageView: View {
                     .foregroundStyle(ReportStyle.secondary)
             }
         }
-        .chartYAxis {
-            AxisMarks(position: .leading, values: Self.niceTicks(glucoseBottom...glucoseTop)) { value in
-                AxisGridLine().foregroundStyle(ReportStyle.grid)
-                AxisValueLabel {
-                    Text(Self.axisLabel(value))
-                        .font(.system(size: 7))
-                        .frame(width: 28, alignment: .trailing)
-                        .foregroundStyle(ReportStyle.secondary)
-                }
-            }
-            AxisMarks(position: .trailing, values: rateTicks.map(y)) { value in
-                AxisValueLabel {
-                    Text(Self.rateLabel(value, bandBottom: bandBottom, bandHeight: bandHeight, scale: rateScale))
-                        .font(.system(size: 6.5))
-                        .foregroundStyle(ReportStyle.secondary)
-                }
-            }
-        }
+        .chartYAxis { eventYAxis(desiredCount: 2) }
         .font(.system(size: 7.5))
     }
 
-    /// The top of the insulin band: the smallest round rate at or over the
-    /// highest, so the band's axis reads in whole steps.
+    /// The same fixed-width labels on both charts, so their plots start at
+    /// the same x and the times line up.
+    private func eventYAxis(desiredCount: Int) -> some AxisContent {
+        AxisMarks(position: .leading, values: .automatic(desiredCount: desiredCount)) { value in
+            AxisGridLine().foregroundStyle(ReportStyle.grid)
+            AxisValueLabel {
+                Text(Self.axisLabel(value))
+                    .font(.system(size: 7))
+                    .frame(width: 28, alignment: .trailing)
+                    .foregroundStyle(ReportStyle.secondary)
+            }
+        }
+    }
+
+    /// The top of the insulin chart: the smallest round rate at or over the
+    /// highest, so its axis reads in whole steps.
     private static func niceRateCeiling(_ rate: Double) -> Double {
         let steps: [Double] = [0.5, 1, 1.5, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50]
         return steps.first { $0 >= rate } ?? (rate / 10).rounded(.up) * 10
-    }
-
-    /// A tick of the insulin band's axis, back in units per hour; the unit
-    /// on the top one only.
-    private static func rateLabel(_ value: AxisValue,
-                                  bandBottom: Double,
-                                  bandHeight: Double,
-                                  scale: Double) -> String {
-        let rate = ((value.as(Double.self) ?? bandBottom) - bandBottom) / bandHeight * scale
-        let rounded = (rate * 10).rounded() / 10
-        let text = rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
-        return rounded >= scale - 0.05 ? text + " U/h" : text
-    }
-
-    /// About four round values inside `range`, for an axis that must not
-    /// run on into the insulin band below it.
-    private static func niceTicks(_ range: ClosedRange<Double>) -> [Double] {
-        let span = range.upperBound - range.lowerBound
-        guard span > 0 else { return [range.lowerBound] }
-        let raw = span / 4
-        let magnitude = pow(10, log10(raw).rounded(.down))
-        let step = [1, 2, 2.5, 5, 10].map { $0 * magnitude }.first { $0 >= raw } ?? raw
-        let first = (range.lowerBound / step).rounded(.up) * step
-        return Array(stride(from: first, through: range.upperBound, by: step))
     }
 
     /// "45 min", "2 h 05 min"

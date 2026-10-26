@@ -102,8 +102,6 @@ extension Report {
         /// Boluses from four hours before the start to the end of the chart,
         /// and the last basal in the 30 hours before.
         let doses: [Event]
-        /// Rapid-acting insulin still working at the start.
-        let bolusOnBoard: Double
         /// Basal and bolus acting across the chart, every ten minutes.
         let activity: [ActivitySample]
         /// Workouts that overlap the six hours before through the end. A low
@@ -243,11 +241,6 @@ extension Report {
         }
         let doses = (boluses + [basal].compactMap { $0 }).sorted { $0.date < $1.date }
 
-        let onBoard = InsulinMath.insulinOnBoard(
-            boluses.filter { $0.date <= start }.map { InsulinMath.Dose(units: $0.amount, date: $0.date) },
-            at: start
-        )
-
         let nearby = workouts.filter {
             $0.end >= start.addingTimeInterval(-workoutLookBack) && $0.start <= end
         }
@@ -278,7 +271,6 @@ extension Report {
                             context: from...to,
                             cgm: glucose.filter { $0.date >= from && $0.date <= to },
                             doses: doses,
-                            bolusOnBoard: onBoard,
                             activity: activity(events: events, over: from...to),
                             workouts: nearby,
                             meter: meter)
