@@ -7,6 +7,7 @@ import Combine
 /// Tap an entry to edit it; use ＋ to add one manually; swipe to delete.
 struct HistoryView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \LogEntry.timestamp, order: .reverse)
     private var entries: [LogEntry]
 
@@ -257,6 +258,15 @@ struct HistoryView: View {
                 await health.refresh(since: healthWindow, force: true)
                 await WeatherBackfill.run(in: context, force: true)
             }
+            .onChange(of: scenePhase) { _, phase in
+                // `.task` runs once per launch, not on each return from the
+                // background — and a lookup started in the background, when
+                // the reading crossed from the watch, may have been cut off.
+                // Coming to the front is when the person looks, so look now
+                // rather than at the next quarter-hour.
+                guard phase == .active else { return }
+                Task { await WeatherBackfill.run(in: context, force: true) }
+            }
         }
     }
 
@@ -383,7 +393,9 @@ private struct EntryRow: View {
                             Text("· outdoors")
                             Image(systemName: "thermometer.medium")
                         } else {
-                            Text("· outdoors")
+                            // The watch never got a fix, so there is
+                            // nowhere to look the weather up for.
+                            Text("· outdoors, no location")
                         }
                     }
                 }

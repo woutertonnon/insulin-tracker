@@ -187,6 +187,9 @@ struct DialView: View {
             case .active:
                 glucoseUnit = SharedStore.glucoseUnit()
                 resetToNeutral()
+                // A reading saved before its fix came, and the app put away
+                // before the fix did: ask again, and the fix stamps it.
+                if !unstampedReadings(near: .now).isEmpty { location.requestFix() }
                 // Repair the complication if a push was missed while away.
                 syncWidget()
             case .inactive, .background:
@@ -208,8 +211,9 @@ struct DialView: View {
             flipBadge()
         }
         // A fix landing while a reading is dialled may land on a known place.
-        .onReceive(location.$latest) { _ in
+        .onReceive(location.$latest) { fix in
             if step > 0 { refreshKnownPlace() }
+            if let fix { stampUnstamped(with: fix) }
         }
     }
 
@@ -558,6 +562,32 @@ struct DialView: View {
         entry.latitude = fix.coordinate.latitude
         entry.longitude = fix.coordinate.longitude
         entry.altitude = wrist.altitude ?? (fix.verticalAccuracy >= 0 ? fix.altitude : nil)
+    }
+
+    /// How long after a reading a fix still stands for where it was taken.
+    /// Weather does not change across a quarter hour's walk.
+    private static let lateFixWindow: TimeInterval = 15 * 60
+
+    /// Readings still without a place that a fix at `date` could stand for.
+    private func unstampedReadings(near date: Date) -> [LogEntry] {
+        allEntries.filter {
+            $0.kind == .glucose && !$0.hasLocation
+                && $0.timestamp <= date
+                && date.timeIntervalSince($0.timestamp) <= Self.lateFixWindow
+        }
+    }
+
+    /// The backstop for `whenFixed`, whose waiting handler lives only in
+    /// memory: a failed request, or the app suspended or ended after the
+    /// wrist went down, and it never runs. The log does not forget, so every
+    /// fix stamps the readings that went without one, and sends them again
+    /// for the phone to look the weather up.
+    private func stampUnstamped(with fix: CLLocation) {
+        let readings = unstampedReadings(near: fix.timestamp)
+        guard !readings.isEmpty else { return }
+        for entry in readings { stamp(entry, with: fix) }
+        try? context.save()
+        for entry in readings { ConnectivityManager.shared.send(entry) }
     }
 
     /// Show the checkmark for `duration`, then return to neutral. Calling it

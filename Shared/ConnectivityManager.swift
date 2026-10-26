@@ -4,6 +4,9 @@ import SwiftData
 #if os(watchOS)
 import WidgetKit
 #endif
+#if os(iOS)
+import UIKit
+#endif
 
 /// Keeps the Watch and iPhone stores in step over WatchConnectivity.
 ///
@@ -357,10 +360,14 @@ final class ConnectivityManager: NSObject, WCSessionDelegate {
         #if os(iOS)
         // A reading with a location has just arrived; the phone is the one
         // with a connection, so look its temperature up now rather than at
-        // the next quarter-hour.
+        // the next quarter-hour. The delivery usually wakes the app in the
+        // background, where it is suspended again within moments — mid-
+        // request, unless it asks for the time to finish the lookup.
         if op == Op.upsert, userInfo["latitude"] != nil, userInfo["temperature"] == nil {
+            let task = UIApplication.shared.beginBackgroundTask(withName: "Weather lookup")
             Task { @MainActor in
                 await WeatherBackfill.run(in: context, force: true)
+                if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
             }
         }
         #endif

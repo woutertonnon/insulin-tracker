@@ -365,10 +365,14 @@ it. The article also subtracts half a mmol/L as a safety margin; that is left
 to the reader.
 
 **The watch needs no network for this.** It records only where, how high and
-when — a one-shot location fix, asked for the moment the crown enters the
-reading region so it is usually in hand three seconds later when the reading
-saves. A fix that lands within the next minute is attached then and the entry
-sent again. The phone, whenever it next runs with a connection, asks
+when — a location fix, asked for the moment the crown enters the reading
+region so it is usually in hand three seconds later when the reading saves.
+Outside, away from Wi‑Fi, GPS can take a minute; a reading saved without a fix
+keeps location running in the background, with the wrist down, until a good
+fix lands or two minutes pass, then stops. A fix that lands is attached then
+and the entry sent again, and any fix within a quarter hour stamps readings
+that still went without. A reading with none shows "no location" in the
+history. The phone, whenever it next runs with a connection, asks
 [**Open-Meteo**](https://open-meteo.com) for that hour's air temperature at
 that spot and writes it onto the entry. The last 92 days come from its
 forecast endpoint, anything older from its archive. A dozen lookups at a time,
