@@ -691,20 +691,26 @@ The edges are set in mg/dL and converted exactly, so a trace gives the same
 events in either unit. An event ends once glucose has been back across the
 line for 15 minutes, as in the consensus definition of a CGM event, so one
 reading bouncing over the line does not split a low in two; a CGM gap longer
-than 20 minutes ends it too, since nothing is known past it.
+than 20 minutes ends it too, since nothing is known past it. A high that
+begins within **three hours** of the last one ending is the same high — the
+correction that did not hold, the meal after it — so it is one event, with
+how many highs went into it and their time above the line beside its length.
 
 The first page has the definition, the totals — events, events per week, time
 in events, median length, how many began overnight, the lowest or highest —
 a legend and the references. Then one panel per event, newest first, three to a page: the
 day, start, end and length; the lowest or highest value and when; a chart from
-four hours before to an hour after, with the CGM, the threshold lines, the
-event shaded, workouts shaded, each dose as a line with its units, and each
+four hours before to an hour after a low, three after a high, with the CGM,
+the threshold lines, the event shaded, workouts shaded, **basal and bolus
+acting** in units per hour as a stacked band beneath the glucose on its own
+right-hand axis (the same curves as the overview), each dose as a line with
+its units, and each
 finger-prick as a dot with, when it was taken outside, a diamond at its
 temperature-adjusted value; and three lines beneath — **insulin** (boluses in
-the four hours before through the end, the last basal in the 30 hours before,
+the four hours before to the end of the chart, the last basal in the 30 hours before,
 and bolus on board at the start), **exercise** (workouts in the six hours
 before through the end, since a low can follow exercise by hours), and
-**meter** (finger-pricks from an hour before to an hour after, each with the
+**meter** (finger-pricks from an hour before to the end of the chart, each with the
 outside temperature and adjusted value where it was taken outside).
 
 ### Insulin acting through the day

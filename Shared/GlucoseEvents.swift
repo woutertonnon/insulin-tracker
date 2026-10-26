@@ -15,7 +15,9 @@ import Foundation
 /// An event ends once glucose has been back across the line for 15 minutes,
 /// as in the international consensus on CGM events — a single reading
 /// bouncing over the line does not split one low into two — or at a CGM gap
-/// longer than `Report`'s 20 minutes, past which nothing is known.
+/// longer than `Report`'s 20 minutes, past which nothing is known. A high that
+/// begins within three hours of the last one ending is folded into it: one
+/// event, its time above the line counted apart from the gaps between.
 extension Report {
 
     struct EventThresholds: Hashable, Sendable {
@@ -66,6 +68,16 @@ extension Report {
         let adjusted: Double?
     }
 
+    /// Insulin acting at one moment, in units per hour — the same rates as
+    /// the overview's "insulin acting through the day" [`InsulinAction`].
+    struct ActivitySample: Hashable, Sendable {
+        let date: Date
+        let basal: Double
+        let bolus: Double
+
+        var total: Double { basal + bolus }
+    }
+
     struct GlucoseEvent: Identifiable, Hashable, Sendable {
         let id: Int
         let kind: EventKind
@@ -77,19 +89,27 @@ extension Report {
         /// Whether a low went under the urgent line, as opposed to qualifying
         /// on duration alone.
         let reachedUrgent: Bool
+        /// Highs that began within `highMerge` of the one before are one event;
+        /// this is how many went into it. Always one for a low.
+        let parts: Int
+        /// Time actually across the line, the stretches between merged highs
+        /// left out.
+        let minutesBeyond: Int
 
         /// What the event's chart shows, in time order.
         let context: ClosedRange<Date>
         let cgm: [GlucosePoint]
-        /// Boluses in the four hours before through the end, and the last
-        /// basal in the 30 hours before.
+        /// Boluses from four hours before the start to the end of the chart,
+        /// and the last basal in the 30 hours before.
         let doses: [Event]
-        /// Rapid-acting insulin still working at the start [5].
+        /// Rapid-acting insulin still working at the start.
         let bolusOnBoard: Double
+        /// Basal and bolus acting across the chart, every ten minutes.
+        let activity: [ActivitySample]
         /// Workouts that overlap the six hours before through the end. A low
         /// can follow exercise by hours.
         let workouts: [Workout]
-        /// Finger-pricks from an hour before to an hour after.
+        /// Finger-pricks from an hour before the start to the end of the chart.
         let meter: [MeterReading]
 
         var minutes: Int { Int((end.timeIntervalSince(start) / 60).rounded()) }
@@ -100,10 +120,31 @@ extension Report {
     private static let basalLookBack: TimeInterval = 30 * 3600
     private static let workoutLookBack: TimeInterval = 6 * 3600
     private static let meterMargin: TimeInterval = 3600
-    private static let chartAfter: TimeInterval = 3600
+
+    /// How long the chart runs on after the end: an hour after a low, three
+    /// after a high — what came down and what went back up is the question
+    /// a high leaves.
+    private static func chartAfter(_ kind: EventKind) -> TimeInterval {
+        kind == .low ? 3600 : 3 * 3600
+    }
+
+    /// A high that begins within this long of the last one ending is the same
+    /// high: the correction that did not hold, or the meal after it.
+    static let highMerge: TimeInterval = 3 * 3600
 
     /// Back across the line for this long ends an event.
     private static let recovery: TimeInterval = 15 * 60
+
+    private static let activityStep: TimeInterval = 10 * 60
+
+    /// One stretch across the line, before merging.
+    private struct Run {
+        var start: Date
+        var end: Date
+        var extreme: GlucosePoint
+        var parts = 1
+        var beyond: TimeInterval
+    }
 
     /// Events that start in `period`, in time order. `glucose` sorted
     /// ascending; it may reach outside the period, and does, so an event
@@ -122,8 +163,11 @@ extension Report {
         let qualifies: (_ minutes: Double, _ extreme: Double) -> Bool = kind == .low
             ? { $0 >= Double(thresholds.lowMinutes) || $1 < thresholds.urgentLow }
             : { minutes, _ in minutes >= Double(thresholds.highMinutes) }
+        let isMoreExtreme: (GlucosePoint, GlucosePoint) -> Bool = kind == .low
+            ? { $0.value < $1.value }
+            : { $0.value > $1.value }
 
-        var found: [GlucoseEvent] = []
+        var runs: [Run] = []
         var i = 0
         while i < glucose.count {
             guard inside(glucose[i].value) else { i += 1; continue }
@@ -148,37 +192,54 @@ extension Report {
             // Ends at the first reading back across the line, when there is
             // one before the gap; otherwise at the last reading inside it.
             let end = recoveredAt.map { glucose[$0].date } ?? glucose[last].date
-            let span = glucose[first...last]
-            let extremePoint = kind == .low
-                ? span.min { $0.value < $1.value }!
-                : span.max { $0.value < $1.value }!
-            guard period.contains(start),
-                  qualifies(end.timeIntervalSince(start) / 60, extremePoint.value) else { continue }
+            let extreme = glucose[first...last].min(by: isMoreExtreme)!
+            guard qualifies(end.timeIntervalSince(start) / 60, extreme.value) else { continue }
 
-            found.append(event(kind: kind, id: found.count, start: start, end: end,
-                               extreme: extremePoint, thresholds: thresholds,
-                               glucose: glucose, events: events, workouts: workouts,
-                               outings: outings, marks: marks))
+            // A high close behind the last one is folded into it.
+            if kind == .high, let previous = runs.last,
+               start.timeIntervalSince(previous.end) <= highMerge {
+                var merged = previous
+                merged.end = end
+                merged.parts += 1
+                merged.beyond += end.timeIntervalSince(start)
+                if isMoreExtreme(extreme, merged.extreme) { merged.extreme = extreme }
+                runs[runs.count - 1] = merged
+            } else {
+                runs.append(Run(start: start, end: end, extreme: extreme, beyond: end.timeIntervalSince(start)))
+            }
         }
-        return found
+
+        return runs
+            .filter { period.contains($0.start) }
+            .enumerated()
+            .map {
+                event(kind: kind, id: $0.offset, run: $0.element, thresholds: thresholds,
+                      glucose: glucose, events: events, workouts: workouts,
+                      outings: outings, marks: marks)
+            }
     }
 
     private static func event(kind: EventKind,
                               id: Int,
-                              start: Date,
-                              end: Date,
-                              extreme: GlucosePoint,
+                              run: Run,
                               thresholds: EventThresholds,
                               glucose: [GlucosePoint],
                               events: [Event],
                               workouts: [Workout],
                               outings: [Temperature.Outing],
                               marks: [Temperature.Mark]) -> GlucoseEvent {
+        let start = run.start
+        let end = run.end
+        // The four hours a bolus acts for before the start, to the chart's
+        // margin after the end.
+        let from = start.addingTimeInterval(-doseLookBack)
+        let to = end.addingTimeInterval(chartAfter(kind))
+
         let boluses = events.filter {
-            $0.kind == .insulin && $0.date >= start.addingTimeInterval(-doseLookBack) && $0.date <= end
+            $0.kind == .insulin && $0.date >= from && $0.date <= to
         }
         let basal = events.last {
-            $0.kind == .basal && $0.date >= start.addingTimeInterval(-basalLookBack) && $0.date <= end
+            $0.kind == .basal && $0.date >= start.addingTimeInterval(-basalLookBack) && $0.date <= to
         }
         let doses = (boluses + [basal].compactMap { $0 }).sorted { $0.date < $1.date }
 
@@ -195,7 +256,7 @@ extension Report {
             .filter {
                 $0.kind == .glucose
                     && $0.date >= start.addingTimeInterval(-meterMargin)
-                    && $0.date <= end.addingTimeInterval(meterMargin)
+                    && $0.date <= to
             }
             .map { reading -> MeterReading in
                 let celsius = outsideAir(reading, outings: outings, marks: marks)
@@ -205,24 +266,51 @@ extension Report {
                                     adjusted: celsius.map { Temperature.adjustedGlucose(reading.amount, celsius: $0) })
             }
 
-        // The four hours a bolus acts for before the start, to an hour after
-        // the end.
-        let from = start.addingTimeInterval(-doseLookBack)
-        let to = end.addingTimeInterval(chartAfter)
-
         return GlucoseEvent(id: id,
                             kind: kind,
                             start: start,
                             end: end,
-                            extreme: extreme.value,
-                            extremeAt: extreme.date,
-                            reachedUrgent: kind == .low && extreme.value < thresholds.urgentLow,
+                            extreme: run.extreme.value,
+                            extremeAt: run.extreme.date,
+                            reachedUrgent: kind == .low && run.extreme.value < thresholds.urgentLow,
+                            parts: run.parts,
+                            minutesBeyond: Int((run.beyond / 60).rounded()),
                             context: from...to,
                             cgm: glucose.filter { $0.date >= from && $0.date <= to },
                             doses: doses,
                             bolusOnBoard: onBoard,
+                            activity: activity(events: events, over: from...to),
                             workouts: nearby,
                             meter: meter)
+    }
+
+    /// Basal and bolus acting every ten minutes across `span`, from every dose
+    /// that can still be acting in it: a day of basal, four hours of bolus.
+    private static func activity(events: [Event], over span: ClosedRange<Date>) -> [ActivitySample] {
+        let basalReach = InsulinAction.basalDuration * 3600
+        let bolusReach = InsulinAction.bolusDuration * 3600
+        let doses = events.filter {
+            ($0.kind == .basal && $0.date >= span.lowerBound.addingTimeInterval(-basalReach))
+                || ($0.kind == .insulin && $0.date >= span.lowerBound.addingTimeInterval(-bolusReach))
+        }.filter { $0.date <= span.upperBound }
+
+        var samples: [ActivitySample] = []
+        var instant = span.lowerBound
+        while instant <= span.upperBound {
+            var basal = 0.0
+            var bolus = 0.0
+            for dose in doses where dose.date <= instant {
+                let hours = instant.timeIntervalSince(dose.date) / 3600
+                if dose.kind == .basal {
+                    basal += dose.amount * InsulinAction.basalRate(hours: hours)
+                } else {
+                    bolus += dose.amount * InsulinAction.bolusRate(hours: hours)
+                }
+            }
+            samples.append(ActivitySample(date: instant, basal: basal, bolus: bolus))
+            instant = instant.addingTimeInterval(activityStep)
+        }
+        return samples
     }
 
     /// The outside air a finger-prick was taken in, when it was taken outside
